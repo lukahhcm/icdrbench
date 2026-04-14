@@ -1,0 +1,115 @@
+shared_operators:
+  - name: clean_links_mapper
+    kind: mapper
+  - name: clean_email_mapper
+    kind: mapper
+  - name: clean_ip_mapper
+    kind: mapper
+  - name: remove_repeat_sentences_mapper
+    kind: mapper
+  - name: whitespace_normalization_mapper
+    kind: mapper
+  - name: fix_unicode_mapper
+    kind: mapper
+  - name: flagged_words_filter
+    kind: filter
+    params:
+      lang: en
+      tokenization: false
+      max_ratio: 0.045
+      flagged_words_dir: data/src/refs
+  - name: stopwords_filter
+    kind: filter
+    params:
+      lang: en
+      tokenization: false
+      min_ratio: 0.30
+      stopwords_dir: data/src/refs
+
+domains:
+  web:
+    description: Web crawl cleanup and filtering.
+    specific_operators:
+      - name: clean_html_mapper
+        kind: mapper
+      - name: text_length_filter
+        kind: filter
+        params:
+          min_len: 200
+      - name: average_line_length_filter
+        kind: filter
+        params:
+          min_len: 15
+          max_len: 2000
+      - name: special_characters_filter
+        kind: filter
+        params:
+          max_ratio: 0.35
+
+  kb_support:
+    description: Knowledge-base and support text preparation.
+    specific_operators:
+      - name: clean_copyright_mapper
+        kind: mapper
+      - name: remove_table_text_mapper
+        kind: mapper
+      - name: remove_long_words_mapper
+        kind: mapper
+      - name: text_length_filter
+        kind: filter
+        params:
+          min_len: 120
+      - name: average_line_length_filter
+        kind: filter
+        params:
+          min_len: 10
+          max_len: 1500
+      - name: special_characters_filter
+        kind: filter
+        params:
+          max_ratio: 0.30
+
+  reports_policy:
+    description: Long-form report and policy document cleanup.
+    specific_operators:
+      - name: clean_copyright_mapper
+        kind: mapper
+      - name: remove_table_text_mapper
+        kind: mapper
+      - name: remove_specific_chars_mapper
+        kind: mapper
+      - name: text_length_filter
+        kind: filter
+        params:
+          min_len: 400
+      - name: average_line_length_filter
+        kind: filter
+        params:
+          min_len: 20
+          max_len: 2500
+      - name: maximum_line_length_filter
+        kind: filter
+        params:
+          max_len: 5000
+      - name: special_characters_filter
+        kind: filter
+        params:
+          max_ratio: 0.25
+
+  scientific:
+    description: Scientific LaTeX source cleanup and canonicalization.
+    specific_operators:
+      - name: remove_comments_mapper
+        kind: mapper
+      - name: remove_bibliography_mapper
+        kind: mapper
+      - name: remove_header_mapper
+        kind: mapper
+        params:
+          drop_no_head: false
+      - name: expand_macro_mapper
+        kind: mapper
+      - name: text_length_filter
+        kind: filter
+        params:
+          min_len: 400

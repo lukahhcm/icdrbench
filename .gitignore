@@ -1,0 +1,19 @@
+.DS_Store
+
+# Python caches
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+*.pyc
+
+# Local environments
+.venv/
+venv/
+
+# Data artifacts
+data/
+outputs/
+
+# Local logs / temp files
+*.log
+*.tmp
