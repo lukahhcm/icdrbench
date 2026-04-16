@@ -80,10 +80,7 @@ fi
 
 command -v git >/dev/null 2>&1 || { echo "git not found" >&2; exit 1; }
 command -v python3 >/dev/null 2>&1 || { echo "python3 not found" >&2; exit 1; }
-command -v huggingface-cli >/dev/null 2>&1 || {
-  echo "huggingface-cli not found. Install with: pip install -U huggingface_hub" >&2
-  exit 1
-}
+command -v uv >/dev/null 2>&1 || { echo "uv not found" >&2; exit 1; }
 
 mkdir -p "$WORKDIR"
 cd "$WORKDIR"
@@ -98,22 +95,16 @@ git fetch --all --prune
 git checkout "$BRANCH"
 git pull --ff-only origin "$BRANCH"
 
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -U pip
-python -m pip install -e .
-python -m pip install -U huggingface_hub py-data-juicer
+uv venv .venv-ops --python 3.11
+uv pip install --python .venv-ops/bin/python -e .
+uv pip install --python .venv-ops/bin/python -U huggingface_hub py-data-juicer
 
-if [[ -n "${HF_TOKEN:-}" ]]; then
-  huggingface-cli login --token "$HF_TOKEN" --add-to-git-credential
-fi
-
-python scripts/release/download_hf_jsonl.py \
+.venv-ops/bin/python scripts/release/download_hf_jsonl.py \
   --repo-id "$HF_DATASET" \
   --repo-root "$PROJECT_DIR"
 
 if [[ "$RUN_PROBE" == "true" ]]; then
-  python scripts/prepare_data/run_dj_per_op_probe.py \
+  PYTHONPATH=src .venv-ops/bin/python scripts/prepare_data/run_dj_per_op_probe.py \
     --execute \
     --resume \
     --np 2 \
@@ -125,5 +116,5 @@ fi
 echo "Server bootstrap complete."
 echo "Project dir: $PROJECT_DIR"
 echo "Now you can run, for example:"
-echo "  source .venv/bin/activate"
-echo "  python scripts/prepare_data/run_dj_per_op_probe.py --execute --resume --summary-csv outputs/dj_per_op_probe/summary_full.csv"
+echo "  PYTHONPATH=src .venv-ops/bin/python scripts/prepare_data/tag_and_assign_domains.py --resume"
+echo "  PYTHONPATH=src .venv-ops/bin/python scripts/prepare_data/run_dj_per_op_probe.py --execute --resume --summary-csv outputs/dj_per_op_probe/summary_full.csv"

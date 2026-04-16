@@ -77,13 +77,13 @@ if [[ -z "${HF_TOKEN:-}" ]]; then
   exit 1
 fi
 
-command -v huggingface-cli >/dev/null 2>&1 || {
-  echo "huggingface-cli not found. Install with: pip install -U huggingface_hub" >&2
-  exit 1
-}
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+PYTHON_BIN="$REPO_ROOT/.venv-ops/bin/python"
+
+if [[ ! -x "$PYTHON_BIN" ]]; then
+  PYTHON_BIN="python3"
+fi
 
 PY_ARGS=(
   --repo-id "$REPO_ID"
@@ -97,4 +97,4 @@ if [[ "$DELETE_EXTRA" == "true" ]]; then
   PY_ARGS+=(--delete-extra)
 fi
 
-python3 "$SCRIPT_DIR/publish_hf_jsonl.py" "${PY_ARGS[@]}"
+"$PYTHON_BIN" "$SCRIPT_DIR/publish_hf_jsonl.py" "${PY_ARGS[@]}"

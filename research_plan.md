@@ -344,40 +344,81 @@ Interactive 模式可以作为扩展实验，但不建议作为投稿主线。
 - 样本过于模板化，模型和规则系统都容易做对；
 - benchmark 更像“识别注入模式”，而不是执行真实数据治理流程。
 
-### 8.1 最可行的任务构造路线：template first, sample second
+### 8.1 推荐的 benchmark construction pipeline：bottom-up discovery + top-down completion
 
-如果你希望**保证每个 step 都是 active**，最可行的方案不是先让 LLM 自由脑暴 workflow，再去海量原始数据里“碰运气”搜索；更稳的做法是：
+更合理的构造路线不是纯 top-down，也不是纯 bottom-up，而是两者结合：
 
-1. **先人工冻结一小批 workflow templates**
+1. **Bottom-up workflow discovery**
 
-   - 以 family 为单位，先定 `2-4` 步的高价值 workflow；
-   - 每个 workflow 都写清楚 step list、参数、目标 domain、预期输出。
-2. **为每个 step 写前置条件与 activation 条件**
+   - 先在 raw corpora 上跑 operator-level tagging；
+   - 为每条样本记录 active mappers、active filter stats、domain candidates；
+   - 对每个 domain 做 co-activation analysis / clustering / frequent-combination mining；
+   - 先得到该 domain 中**真实高频、数据支持较强**的 operator combinations，再把它们聚成 workflow families。
+2. **从 discovery 结果中提炼 workflow families 与 concrete workflows**
 
-   - 例如 `CleanEmail` 要求样本中至少有一个真实 email；
-   - `RemoveTableText` 要求样本中存在表格残留；
-   - `TextLengthFilter` 不只要求可执行，还要要求前序清洗会让长度跨过阈值或接近阈值。
-3. **先做 corpus capability index，再做匹配**
+   - 先选出每个 domain 的 `3-6` 个 workflow families；
+   - 再在每个 family 下保留一批高支持度 concrete workflow candidates；
+   - 这些 candidates 可以继续人工补顺序、补 activation spec，变成最终 benchmark workflows；
+   - 长度需要显式覆盖 `2-5` 步，并尽量形成 length ladder；
+   - 这一步的目的不是让共现直接等于 workflow，而是从共现中提炼 benchmark-worthy workflows。
+3. **Top-down workflow completion**
 
-   - 不直接找“完美样本”，而是先为语料池中的每个样本打 capability tags；
-   - 例如：`has_html`、`has_links`、`has_email`、`has_ip`、`has_repeat_sentences`、`has_table_residue`、`has_long_lines`、`has_comments`、`has_bibliography`、`has_macros`。
-4. **按 workflow 前置条件筛样本**
+   - 对 bottom-up 中覆盖不足、但应用上重要的场景，人工预定义 workflows；
+   - 重点补齐：长链 workflows、顺序敏感 workflows、near-threshold filtering workflows、低频但关键的 domain tasks；
+   - 这部分可以通过同源真实污染、targeted splice、inverse synthesis 来补足。
+4. **统一做 executor-based validation**
 
-   - workflow 需要什么，就只从满足这些条件的样本子池里取；
-   - 不满足就不实例化该 workflow，而不是强行套。
-5. **若天然样本不够，再做同源真实污染补足**
-
-   - 从同站点、同文档集合、同论文工程里拼接真实噪声片段；
-   - 优先补足缺失的 active steps，而不是手写模板化假噪声。
-6. **最后做 executor-based activation 验证**
-
-   - 对每个候选任务跑完整 recipe；
+   - 对每条 candidate workflow 做 full-chain execution；
    - 再做 `leave-one-step-out` ablation；
-   - 若删掉任一步之后最终 `status` 或 `clean_text` 不变，则该 step 不是强 active，不应进入主榜。
+   - 必要时做 order swap；
+   - 若某一步删掉后最终 `status` 或 `clean_text` 不变，则该 step 不是强 active，不应进入 benchmark。
 
-这个流程的核心是：**workflow 先小规模人工设计，数据按能力索引匹配，最后由 executor 反证每一步都真的重要。** 这里的 `step-active` 是数据质量约束，不再单独作为 headline 难度轴。
+这个流程的核心是：
 
-### 8.2 推荐的四路数据构造策略
+- **bottom-up** 保证 workflow grounded in real data distributions；
+- **top-down** 保证 benchmark 覆盖关键应用场景；
+- **executor-based validation** 保证每一步都是真 active。
+
+### 8.2 Bottom-up 阶段的具体操作
+
+如果你希望系统发现“每个 domain 里哪些 workflows 值得做 benchmark”，比较稳的流程是：
+
+1. **先做 operator-level tagging**
+
+   - 在 raw corpora 上跑所有相关 deterministic operators；
+   - 记录每条样本的 active mapper names、active counts、domain candidates、assigned domain。
+2. **做 domain-specific clustering / frequent-combination mining**
+
+   - 对同一 domain 的样本，统计高频 active operator sets；
+   - 分析不同链长的支持度分布；
+   - 把高频共现的 operator combinations 聚成 workflow families，并选出每个 family 下最有代表性的 concrete workflow candidates。
+3. **从高频组合中挑 concrete workflows**
+
+   - 不是把所有共现都直接当 workflow；
+   - 而是优先选：高支持度、语义可解释、与 domain goal 一致、顺序有潜在意义的组合。
+4. **把 workflow 写成 activation spec**
+
+   - 为每条 concrete workflow 补上 raw requirements、intermediate requirements、filter boundary requirements；
+   - 这一步之后，workflow 才成为可搜索、可实例化、可验证的 benchmark unit。
+
+### 8.3 Top-down 阶段的具体操作
+
+如果 bottom-up 结果没有覆盖到 benchmark 需要强调的场景，则应当补一个 top-down completion 层：
+
+1. **人工预定义重要 workflows**
+
+   - 覆盖长链、顺序敏感、near-threshold、rare-but-critical 场景；
+   - 明确 step list、目标 domain、输出和 activation requirements。
+2. **在真实样本上做 targeted augmentation**
+
+   - 用同源真实噪声、splice、inverse synthesis 做补足；
+   - 补的是 benchmark coverage，不是随意手写 pattern noise。
+3. **仍然用 executor 做统一验收**
+
+   - top-down workflows 不能绕过 step-active 验证；
+   - 只有通过 full-chain 与 ablation 检查的样本才能进入 benchmark。
+
+### 8.4 推荐的四路数据构造策略
 
 #### 路线 A：Natural-noise route
 
@@ -424,7 +465,7 @@ Interactive 模式可以作为扩展实验，但不建议作为投稿主线。
 
 这些样本最能拉开模型执行细粒度规则的能力差异。
 
-### 8.3 数据保留标准
+### 8.5 数据保留标准
 
 最终进入 benchmark 的样本应满足：
 
@@ -435,7 +476,7 @@ Interactive 模式可以作为扩展实验，但不建议作为投稿主线。
 5. 在不同组合复杂度切片中仍然具有区分度。
 6. 对主榜样本，移除任一步后，最终 `status` 或 `clean_text` 必须改变。
 
-### 8.4 质量控制建议
+### 8.6 质量控制建议
 
 建议维护三类 sanity baseline：
 

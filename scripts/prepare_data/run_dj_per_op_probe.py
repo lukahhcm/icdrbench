@@ -111,8 +111,8 @@ def main() -> None:
     parser.add_argument('--config-dir', default='configs/dj_per_op_probe')
     parser.add_argument('--output-dir', default='outputs/dj_per_op_probe')
     parser.add_argument('--summary-csv', default='outputs/dj_per_op_probe/summary.csv')
-    parser.add_argument('--dj-process-bin', default='.venv-dj311/bin/dj-process')
-    parser.add_argument('--dj-analyze-bin', default='.venv-dj311/bin/dj-analyze')
+    parser.add_argument('--dj-process-bin', default='.venv-ops/bin/dj-process')
+    parser.add_argument('--dj-analyze-bin', default='.venv-ops/bin/dj-analyze')
     parser.add_argument('--np', type=int, default=4)
     parser.add_argument('--max-tasks', type=int, default=None)
     parser.add_argument(
