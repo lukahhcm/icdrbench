@@ -612,7 +612,7 @@ def iter_arxiv_records(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description='Convert local corpora into the unified DJBench raw schema.')
+    parser = argparse.ArgumentParser(description='Convert local corpora into the unified ICDR-Bench raw schema.')
     subparsers = parser.add_subparsers(dest='kind', required=True)
 
     commoncrawl = subparsers.add_parser('commoncrawl', help='Convert Common Crawl WARC files')

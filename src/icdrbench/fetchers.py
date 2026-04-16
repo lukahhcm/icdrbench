@@ -10,7 +10,7 @@ import requests
 from bs4 import BeautifulSoup
 from datasets import load_dataset
 
-USER_AGENT = 'DJBenchBootstrap/0.1 (+https://github.com/datajuicer/data-juicer)'
+USER_AGENT = 'ICDRBenchBootstrap/0.1 (+https://github.com/datajuicer/data-juicer)'
 
 
 def ensure_parent(path: Path) -> None:

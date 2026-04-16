@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "djbench"
+name = "icdrbench"
 version = "0.1.0"
-description = "Benchmark construction utilities for DJBench"
+description = "Benchmark construction utilities for ICDR-Bench"
 requires-python = ">=3.9"
 dependencies = [
   "requests",

@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from djbench.config import load_domains_config
-from djbench.domain_labeling import (
+from icdrbench.config import load_domains_config
+from icdrbench.domain_labeling import (
     build_domain_execution_plan,
     domain_operator_catalog_frame,
     process_corpus,

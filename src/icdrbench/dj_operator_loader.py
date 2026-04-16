@@ -13,11 +13,11 @@ from typing import Any, Dict
 
 import regex as re
 
-ROOT = Path(__file__).resolve().parents[3]
-DJBENCH_NEW_ROOT = ROOT / 'djbench_new'
-DJ_SOURCE = DJBENCH_NEW_ROOT / 'data-juicer' / 'data_juicer'
-DJ_REF_ASSETS = DJBENCH_NEW_ROOT / 'data' / 'src' / 'refs'
-LOCAL_REF_ASSETS = ROOT / 'data' / 'src' / 'refs'
+REPO_ROOT = Path(__file__).resolve().parents[2]
+ICDRBENCH_ROOT = REPO_ROOT
+DJ_SOURCE = ICDRBENCH_ROOT / 'data-juicer' / 'data_juicer'
+DJ_REF_ASSETS = ICDRBENCH_ROOT / 'data' / 'src' / 'refs'
+LOCAL_REF_ASSETS = REPO_ROOT / 'data' / 'src' / 'refs'
 
 
 @dataclass(frozen=True)

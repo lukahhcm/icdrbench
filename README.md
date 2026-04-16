@@ -1,6 +1,12 @@
-# DJBench Bootstrap Workspace
+# ICDR-Bench Bootstrap Workspace
 
-This directory is the new development workspace for the benchmark.
+This directory is the development workspace for **ICDR-Bench: Benchmarking LLMs for Interactive Compositional Data Refinement**.
+
+The current benchmark mainline has two first-class evaluation tracks:
+- `Solo`: the user provides a fully specified compositional data-refinement workflow and the model executes it directly.
+- `Interactive`: the user gives a partially specified refinement goal and the model must clarify the requirements before executing.
+
+Both tracks share the same domain families, deterministic operator-backed references, and final output schema: `status ∈ {KEEP, DROP}` plus `clean_text`.
 
 ## Current workflow
 - raw corpus conversion scripts for the local datasets
@@ -9,7 +15,7 @@ This directory is the new development workspace for the benchmark.
 
 ## Quick start
 ```bash
-cd /Users/tarak30/Downloads/djbench/djbench
+cd /Users/tarak30/Downloads/icdrbench
 PYTHONPATH=src python3 scripts/prepare_data/convert_raw_corpus.py arxiv
 PYTHONPATH=src python3 scripts/prepare_data/tag_and_assign_domains.py
 ```

@@ -1,27 +1,31 @@
-# DJBench Domain Design v5
+# ICDR-Bench Domain Design v6
 
-## 0. 主榜统一协议
-DJBench v1 主榜统一采用：
+## 0. Solo / Interactive 共用执行协议
+ICDR-Bench v1 的 `Solo` 与 `Interactive` 两条主线在执行阶段统一采用：
 - `status ∈ {KEEP, DROP}`
 - `clean_text`
 
-也就是说，所有主榜任务都评测：
+也就是说，两条主线最终都评测：
 - 模型是否做出了正确的保留/丢弃决策；
 - 若保留，模型是否输出了与 deterministic executor 一致的最终清洗文本。
 
+两条主线的区别不在最终 artifact，而在输入设定：
+- `Solo`: 用户一次性给出完整 workflow specification；
+- `Interactive`: 用户先给出高层 refinement goal，模型可在限定轮数内澄清需求后再执行。
+
 这样做的好处是：
 - 评测协议简单；
-- 不同 domain 之间可以直接横向比较；
+- 不同 domain、不同交互设定之间可以直接横向比较；
 - 避免结构化输出格式带来的额外评测争议。
 
-因此，像 `ExtractTablesFromHtmlMapper`、`LatexFigureContextExtractorMapper` 这类更自然输出结构化 artifact 的算子，适合作为 appendix / extension，而不是 v1 主榜协议。
+因此，像 `ExtractTablesFromHtmlMapper`、`LatexFigureContextExtractorMapper` 这类更自然输出结构化 artifact 的算子，适合作为 appendix / extension，而不是 v1 核心协议。
 
 ---
 
 ## 1. domain 应该按应用场景来分
 如果目标是一个更强、更有应用价值的 benchmark，domain 不应该只按“数据长什么样”来分，而要按“这个 benchmark 服务哪个真实 pipeline”来分。
 
-DJBench v1 主榜建议使用 4 个应用场景明确的 domain：
+ICDR-Bench v1 建议使用 4 个应用场景明确的 domain：
 1. `Web Crawl Cleanup & Filtering`
 2. `Knowledge Base / Support Corpus Preparation`
 3. `Report / Policy / Compliance Document Cleanup`
@@ -37,10 +41,10 @@ DJBench v1 主榜建议使用 4 个应用场景明确的 domain：
 
 ## 2. 全局设计原则
 ### 2.1 仍然只做 text-first
-DJBench v1 主榜不做多模态，不做 tool-calling，不做 workflow generation。
+ICDR-Bench v1 不做多模态，不做 tool-calling，不做 workflow generation。
 
 ### 2.2 仍然优先使用 deterministic Data-Juicer operators
-主榜工作流必须能由 deterministic executor 给出唯一 `status + clean_text`。
+两条主线在执行阶段都必须能由 deterministic executor 给出唯一 `status + clean_text`。
 
 ### 2.3 难度必须来自机制，不只是脏数据更复杂
 oral 导向下，每个 domain 至少要覆盖三类机制：
@@ -48,12 +52,12 @@ oral 导向下，每个 domain 至少要覆盖三类机制：
 2. `Composition-complexity slices`
 3. `Step-active quality control`
 
-这里刻意不使用“compositional generalization”这一说法，因为 DJBench 主榜不发布 train split；我们评的是**组合复杂度**，不是训练集意义上的泛化。
+这里刻意不使用“compositional generalization”这一说法，因为 ICDR-Bench 不发布 train split；我们评的是**组合复杂度**，不是训练集意义上的泛化。
 
 这里建议把“中间状态”降级为质检约束，而不是 headline 机制：
 - `Order-sensitive`: 交换两个 active steps 的顺序，最终 `status` 或 `clean_text` 改变。
 - `Composition-complexity`: workflow 由更多 active steps 组成，长度更长、组合更复杂。
-- `Step-active quality control`: 删掉任一步，最终 `status` 或 `clean_text` 应改变，否则该任务不进入主榜。
+- `Step-active quality control`: 删掉任一步，最终 `status` 或 `clean_text` 应改变，否则该任务不进入核心评测。
 
 ### 2.4 数据构造不能只靠 pattern noise
 必须优先使用：
@@ -146,7 +150,7 @@ oral 导向下，每个 domain 至少要覆盖三类机制：
 ### 3.7 oral 导向的难度机制
 - `Order-sensitive`: 需要先把 HTML 解析成正文，再做后续基于纯文本的清洗；若把这些步骤交换到 HTML 解析之前，最终 `clean_text` 会变
 - `Composition-complexity`: 在高难切片中加入三步、四步 workflow
-- `Step-active QC`: 进入主榜的 workflow 需要通过 leave-one-step-out 检查，确保关键清洗步不是 no-op
+- `Step-active QC`: 进入核心评测的 workflow 需要通过 leave-one-step-out 检查，确保关键清洗步不是 no-op
 
 ### 3.8 为什么有应用价值
 它直接对应 web-scale data pipeline 的第一步，也是 foundation model 预训练和通用检索最常见的语料入口之一。
@@ -236,7 +240,7 @@ oral 导向下，每个 domain 至少要覆盖三类机制：
 ### 4.7 oral 导向的难度机制
 - `Order-sensitive`: 某些 support 文本需要先做残留清理，再做规范化或过滤；交换顺序后最终 `clean_text` 或 `status` 会改变
 - `Composition-complexity`: 高难切片里引入三步混合 workflow，而核心切片只含二步组合
-- `Step-active QC`: 只有删去任一步就会改变最终结果的样本，才进入主榜
+- `Step-active QC`: 只有删去任一步就会改变最终结果的样本，才进入核心评测
 
 ### 4.8 为什么有应用价值
 这是企业知识库、support bot、FAQ 检索、RAG ingest 中非常真实的一步，而且和“原始网页清洗”不同，它更接近组织内部真正会维护的 corpus。
@@ -390,14 +394,14 @@ oral 导向下，每个 domain 至少要覆盖三类机制：
 ### 6.7 oral 导向的难度机制
 - `Order-sensitive`: merge / cleanup / expand 之间的顺序交换会改变最终 `clean_text`
 - `Composition-complexity`: 高难切片引入 `merge + cleanup + expand + filter` 这类更长链组合
-- `Step-active QC`: merge、cleanup、expand、filter 中的任一步若删掉后结果不变，则该样本不纳入主榜
+- `Step-active QC`: merge、cleanup、expand、filter 中的任一步若删掉后结果不变，则该样本不纳入核心评测
 
 ### 6.8 为什么有应用价值
 它对应 scientific data pipeline 的真实难点，而且和前三个 domain 在数据基底与应用目标上都明显不同。
 
 ---
 
-## 7. 最终建议的主榜配置
+## 7. 最终建议的核心配置
 ### 7.1 推荐 domain 数量
 - `4` 个 domain
 
@@ -406,7 +410,7 @@ oral 导向下，每个 domain 至少要覆盖三类机制：
 - 总计 `12` 个 family
 
 ### 7.3 推荐统一输出协议
-所有主榜任务统一为：
+Solo 与 Interactive 两条主线在最终执行阶段统一为：
 ```json
 {"status": "KEEP", "clean_text": "..."}
 ```
@@ -415,8 +419,8 @@ oral 导向下，每个 domain 至少要覆盖三类机制：
 {"status": "DROP", "clean_text": ""}
 ```
 
-### 7.4 推荐主榜优先级
-#### 必进主榜
+### 7.4 推荐优先级
+#### 必进核心集
 - D1-F1 HTML body cleanup
 - D1-F3 Cleanup-then-filter
 - D2-F2 Support-corpus residue cleanup
@@ -426,7 +430,7 @@ oral 导向下，每个 domain 至少要覆盖三类机制：
 - D4-F1 Source cleanup
 - D4-F3 Canonicalize-then-filter
 
-#### 很适合主榜
+#### 很适合核心集
 - D1-F2 Web sanitization
 - D2-F1 Support-text sanitization
 - D3-F1 Front-matter / boilerplate cleanup

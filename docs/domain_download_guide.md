@@ -1,4 +1,4 @@
-# DJBench Domain Download Guide
+# ICDR-Bench Domain Download Guide
 
 ## 1. Guiding principle
 Data should be downloaded in the **raw representation that makes the target operators meaningful**.

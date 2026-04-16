@@ -4,12 +4,12 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from djbench.config import load_domains_config
-from djbench.fetchers import iter_domain_records, write_jsonl
+from icdrbench.config import load_domains_config
+from icdrbench.fetchers import iter_domain_records, write_jsonl
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description='Download small bootstrap corpora for DJBench domains.')
+    parser = argparse.ArgumentParser(description='Download small bootstrap corpora for ICDR-Bench domains.')
     parser.add_argument('--config', default='configs/domains.yaml')
     parser.add_argument('--out-dir', default='data/raw')
     parser.add_argument('--domains', nargs='*', default=None)

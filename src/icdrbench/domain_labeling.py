@@ -9,8 +9,8 @@ from typing import Any, Dict, Iterator, List, Tuple
 
 import pandas as pd
 
-from djbench.dj_operator_loader import get_operator_kind
-from djbench.support_scan import normalize_record, run_filter, run_mapper
+from icdrbench.dj_operator_loader import get_operator_kind
+from icdrbench.support_scan import normalize_record, run_filter, run_mapper
 
 
 def iter_jsonl(path: Path) -> Iterator[Dict[str, Any]]:
@@ -213,7 +213,7 @@ def _build_filtered_record(
     else:
         meta = {'raw_meta': raw_meta}
 
-    meta['djbench_domain_labeling'] = {
+    meta['icdrbench_domain_labeling'] = {
         'source_corpus': corpus_name,
         'original_domain': record.get('domain'),
         'assigned_domain': assigned_domain,
