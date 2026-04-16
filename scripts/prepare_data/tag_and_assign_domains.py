@@ -2,16 +2,17 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 import pandas as pd
 
+ROOT = Path(__file__).resolve().parents[2]
+SRC = ROOT / 'src'
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
 from icdrbench.config import load_domains_config
-from icdrbench.domain_labeling import (
-    build_domain_execution_plan,
-    domain_operator_catalog_frame,
-    process_corpus,
-)
 
 
 def _resolve_path(root: Path, raw_path_value: str) -> Path:
@@ -45,8 +46,13 @@ def main() -> None:
     parser.add_argument('--progress-every', type=int, default=500)
     parser.add_argument('--resume', action='store_true', help='Resume from existing per-corpus tagged/filtered outputs.')
     args = parser.parse_args()
+    from icdrbench.domain_labeling import (
+        build_domain_execution_plan,
+        domain_operator_catalog_frame,
+        process_corpus,
+    )
 
-    root = Path(__file__).resolve().parents[2]
+    root = ROOT
     corpora_cfg = load_domains_config(root / args.corpora_config)['corpora']
     domains_cfg = load_domains_config(root / args.domains_config)
     selected = set(args.corpora) if args.corpora else None

@@ -2,7 +2,13 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+SRC = ROOT / 'src'
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 
 from icdrbench.config import load_domains_config
 from icdrbench.fetchers import iter_domain_records, write_jsonl
@@ -15,7 +21,7 @@ def main() -> None:
     parser.add_argument('--domains', nargs='*', default=None)
     args = parser.parse_args()
 
-    root = Path(__file__).resolve().parents[2]
+    root = ROOT
     cfg = load_domains_config(root / args.config)
     selected = set(args.domains) if args.domains else None
     out_dir = root / args.out_dir

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from collections import Counter, defaultdict
 from itertools import combinations
 from math import ceil
@@ -11,6 +12,11 @@ from typing import Any, Iterable
 
 import pandas as pd
 import yaml
+
+ROOT = Path(__file__).resolve().parents[2]
+SRC = ROOT / 'src'
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 
 from icdrbench.config import load_domains_config
 
@@ -346,7 +352,7 @@ def main() -> None:
     parser.add_argument('--max-workflows-per-family', type=int, default=8)
     args = parser.parse_args()
 
-    root = Path(__file__).resolve().parents[2]
+    root = ROOT
     tagged_dir = (root / args.tagged_dir).resolve()
     output_dir = (root / args.output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)

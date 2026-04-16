@@ -34,6 +34,8 @@ uv pip install --python .venv-ops/bin/python -U huggingface_hub py-data-juicer
 
 如果 `data-juicer` 就放在仓库根目录下的 `./data-juicer`，可以不设 `ICDRBENCH_DATA_JUICER_ROOT`。
 
+这些脚本现在会自动把仓库里的 `src/` 加到 `sys.path`，所以不需要额外设置 `PYTHONPATH=src`。
+
 ## 3. 下载数据
 
 从 Hugging Face 下载当前 manifest 里的 JSONL：
@@ -60,13 +62,13 @@ HF_TOKEN=<your_hf_token_if_needed> \
 先小规模试跑：
 
 ```bash
-PYTHONPATH=src .venv-ops/bin/python scripts/prepare_data/tag_and_assign_domains.py --max-records 200
+.venv-ops/bin/python scripts/prepare_data/tag_and_assign_domains.py --max-records 200
 ```
 
 正式继续跑：
 
 ```bash
-PYTHONPATH=src .venv-ops/bin/python scripts/prepare_data/tag_and_assign_domains.py --resume
+.venv-ops/bin/python scripts/prepare_data/tag_and_assign_domains.py --resume
 ```
 
 输出文件：
@@ -83,11 +85,11 @@ PYTHONPATH=src .venv-ops/bin/python scripts/prepare_data/tag_and_assign_domains.
 只跑部分语料：
 
 ```bash
-PYTHONPATH=src .venv-ops/bin/python scripts/prepare_data/tag_and_assign_domains.py --corpora arxiv pii --resume
+.venv-ops/bin/python scripts/prepare_data/tag_and_assign_domains.py --corpora arxiv pii --resume
 ```
 
 如果要跑 Data-Juicer 单算子 probe：
 
 ```bash
-PYTHONPATH=src .venv-ops/bin/python scripts/prepare_data/run_dj_per_op_probe.py --execute --resume
+.venv-ops/bin/python scripts/prepare_data/run_dj_per_op_probe.py --execute --resume
 ```
