@@ -111,8 +111,8 @@ def main() -> None:
     parser.add_argument('--config-dir', default='configs/dj_per_op_probe')
     parser.add_argument('--output-dir', default='outputs/dj_per_op_probe')
     parser.add_argument('--summary-csv', default='outputs/dj_per_op_probe/summary.csv')
-    parser.add_argument('--dj-process-bin', default='.venv-ops/bin/dj-process')
-    parser.add_argument('--dj-analyze-bin', default='.venv-ops/bin/dj-analyze')
+    parser.add_argument('--dj-process-bin', default='dj-process')
+    parser.add_argument('--dj-analyze-bin', default='dj-analyze')
     parser.add_argument('--np', type=int, default=4)
     parser.add_argument('--max-tasks', type=int, default=None)
     parser.add_argument(
@@ -141,8 +141,8 @@ def main() -> None:
     config_dir = root / args.config_dir
     output_dir = root / args.output_dir
     summary_csv = root / args.summary_csv
-    process_bin = (root / args.dj_process_bin).resolve()
-    analyze_bin = (root / args.dj_analyze_bin).resolve()
+    process_bin = Path(args.dj_process_bin) if '/' in args.dj_process_bin else Path(args.dj_process_bin)
+    analyze_bin = Path(args.dj_analyze_bin) if '/' in args.dj_analyze_bin else Path(args.dj_analyze_bin)
 
     config_dir.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)

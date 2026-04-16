@@ -2,10 +2,15 @@
 from __future__ import annotations
 
 import argparse
+import json
+import subprocess
 import sys
+from collections import Counter
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
+import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / 'src'
@@ -13,110 +18,452 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from icdrbench.config import load_domains_config
+from icdrbench.domain_assignment import (
+    build_domain_execution_plan,
+    build_filtered_record,
+    domain_operator_catalog_frame,
+    rank_domain_candidates,
+)
 
 
-def _resolve_path(root: Path, raw_path_value: str) -> Path:
+FILTER_STATUS_RULES: dict[str, dict[str, Any]] = {
+    'alphanumeric_filter': {'value_key': lambda params: 'alpha_token_ratio' if params.get('tokenization') else 'alnum_ratio', 'min_key': 'min_ratio', 'max_key': 'max_ratio'},
+    'average_line_length_filter': {'value_key': 'avg_line_length', 'min_key': 'min_len', 'max_key': 'max_len'},
+    'character_repetition_filter': {'value_key': 'char_rep_ratio', 'min_key': 'min_ratio', 'max_key': 'max_ratio'},
+    'flagged_words_filter': {'value_key': 'flagged_words_ratio', 'min_key': 'min_ratio', 'max_key': 'max_ratio'},
+    'maximum_line_length_filter': {'value_key': 'max_line_length', 'min_key': 'min_len', 'max_key': 'max_len'},
+    'stopwords_filter': {'value_key': 'stopwords_ratio', 'min_key': 'min_ratio', 'max_key': 'max_ratio'},
+    'text_length_filter': {'value_key': 'text_len', 'min_key': 'min_len', 'max_key': 'max_len'},
+    'word_repetition_filter': {'value_key': 'word_rep_ratio', 'min_key': 'min_ratio', 'max_key': 'max_ratio'},
+    'words_num_filter': {'value_key': 'num_words', 'min_key': 'min_num', 'max_key': 'max_num'},
+}
+
+
+def is_supported_tagging_variant(variant: dict[str, Any]) -> bool:
+    if variant['kind'] == 'mapper':
+        return True
+    return variant['name'] in FILTER_STATUS_RULES
+
+
+def iter_jsonl(path: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    with path.open('r', encoding='utf-8') as f:
+        for lineno, line in enumerate(f, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError as exc:
+                preview = line[:200]
+                raise ValueError(
+                    f'Invalid JSONL record in {path} at line {lineno}: {exc.msg}. Line preview: {preview!r}'
+                ) from exc
+    return rows
+
+
+def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open('w', encoding='utf-8') as f:
+        for row in rows:
+            f.write(json.dumps(row, ensure_ascii=False) + '\n')
+
+
+def resolve_path(root: Path, raw_path_value: str) -> Path:
     raw_path = Path(raw_path_value)
     if raw_path.is_absolute():
         return raw_path
     return root / raw_path
 
 
-def _count_jsonl_lines(path: Path) -> int:
-    with open(path, 'rb') as f:
+def count_jsonl_lines(path: Path) -> int:
+    with path.open('rb') as f:
         return sum(1 for _ in f)
+
+
+def ensure_head_sample(source_path: Path, sample_path: Path, max_records: int) -> Path:
+    sample_path.parent.mkdir(parents=True, exist_ok=True)
+    if sample_path.exists() and count_jsonl_lines(sample_path) == max_records:
+        return sample_path
+
+    with source_path.open('r', encoding='utf-8') as src, sample_path.open('w', encoding='utf-8') as dst:
+        for i, line in enumerate(src):
+            if i >= max_records:
+                break
+            dst.write(line)
+    return sample_path
+
+
+def resolve_bin(raw: str) -> str:
+    if '/' in raw:
+        return str((ROOT / raw).resolve()) if not Path(raw).is_absolute() else raw
+    return raw
+
+
+def build_process_cfg(dataset_path: Path, export_path: Path, op_name: str, params: dict[str, Any], np: int, project_name: str) -> dict[str, Any]:
+    return {
+        'project_name': project_name,
+        'dataset_path': str(dataset_path),
+        'np': np,
+        'export_path': str(export_path),
+        'process': [{op_name: params}],
+    }
+
+
+def build_analyze_cfg(dataset_path: Path, export_path: Path, op_name: str, params: dict[str, Any], np: int, project_name: str) -> dict[str, Any]:
+    return {
+        'project_name': project_name,
+        'dataset_path': str(dataset_path),
+        'np': np,
+        'export_path': str(export_path),
+        'export_original_dataset': False,
+        'save_stats_in_one_file': True,
+        'process': [{op_name: params}],
+    }
+
+
+def stats_path_for_export(export_path: Path) -> Path:
+    return export_path.with_name(f'{export_path.stem}_stats.jsonl')
+
+
+def run_command(cmd: list[str], log_path: Path) -> int:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open('w', encoding='utf-8') as lf:
+        proc = subprocess.run(cmd, stdout=lf, stderr=subprocess.STDOUT, check=False)
+    return proc.returncode
+
+
+def resolve_record_field(record: dict[str, Any], field_name: str, field_map: dict[str, str] | None = None, defaults: dict[str, Any] | None = None, fallback: Any = None) -> Any:
+    field_map = field_map or {}
+    defaults = defaults or {}
+    source_field = field_map.get(field_name, field_name)
+    if source_field in record:
+        return record[source_field]
+    if field_name in defaults:
+        return defaults[field_name]
+    return fallback
+
+
+def get_keep_boolean(
+    value: float | int | None,
+    min_val: float | int | None,
+    max_val: float | int | None,
+    min_closed_interval: bool = True,
+    max_closed_interval: bool = True,
+    reversed_range: bool = False,
+) -> bool | None:
+    if value is None:
+        return None
+    if reversed_range:
+        min_closed_interval = not min_closed_interval
+        max_closed_interval = not max_closed_interval
+    res = True
+    if min_val is not None:
+        res = res and (value >= min_val if min_closed_interval else value > min_val)
+    if max_val is not None:
+        res = res and (value <= max_val if max_closed_interval else value < max_val)
+    if reversed_range:
+        res = not res
+    return res
+
+
+def infer_filter_status(op_name: str, params: dict[str, Any], stats: dict[str, Any]) -> tuple[bool | None, str | None]:
+    rule = FILTER_STATUS_RULES.get(op_name)
+    if rule is None:
+        return None, None
+
+    value_key = rule['value_key'](params) if callable(rule['value_key']) else rule['value_key']
+    value = stats.get(value_key)
+    keep = get_keep_boolean(
+        value=value,
+        min_val=params.get(rule['min_key']),
+        max_val=params.get(rule['max_key']),
+        min_closed_interval=bool(params.get('min_closed_interval', True)),
+        max_closed_interval=bool(params.get('max_closed_interval', True)),
+        reversed_range=bool(params.get('reversed_range', False)),
+    )
+    return keep, value_key
+
+
+def aggregate_mapper_results(
+    input_rows: list[dict[str, Any]],
+    output_rows: list[dict[str, Any]],
+    *,
+    text_field: str,
+) -> list[dict[str, Any]]:
+    if len(input_rows) != len(output_rows):
+        raise ValueError(f'mapper output row count mismatch: input={len(input_rows)} output={len(output_rows)}')
+
+    results: list[dict[str, Any]] = []
+    for src, out in zip(input_rows, output_rows):
+        src_text = src.get(text_field, '')
+        out_text = out.get(text_field, '')
+        results.append(
+            {
+                'kind': 'mapper',
+                'execution_mode': 'process',
+                'active': out_text != src_text,
+                'output_length': len(out_text),
+                'delta_chars': len(out_text) - len(src_text),
+            }
+        )
+    return results
+
+
+def aggregate_filter_results(
+    stats_rows: list[dict[str, Any]],
+    *,
+    op_name: str,
+    params: dict[str, Any],
+) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    for row in stats_rows:
+        stats = row.get('__dj__stats__', {}) or {}
+        meta = row.get('__dj__meta__', {}) or {}
+        keep, value_key = infer_filter_status(op_name, params, stats)
+        results.append(
+            {
+                'kind': 'filter',
+                'execution_mode': 'analyze',
+                'keep': keep,
+                'status': 'KEEP' if keep is True else 'DROP' if keep is False else 'UNKNOWN',
+                'stats': stats,
+                'meta': meta,
+                'status_value_key': value_key,
+                'status_value': stats.get(value_key) if value_key else None,
+            }
+        )
+    return results
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description='Tag corpora with all domain operators, infer per-record domains, and keep only records with enough active mappers.'
+        description='Tag corpora via Data-Juicer CLI, then aggregate per-op outputs into domain assignments and workflow-mining inputs.'
     )
     parser.add_argument('--corpora-config', default='configs/corpora.yaml')
     parser.add_argument('--domains-config', default='configs/domains.yaml')
     parser.add_argument('--corpora', nargs='*', default=None)
+    parser.add_argument('--config-dir', default='outputs/dj_cli_tagging/configs')
+    parser.add_argument('--per-op-dir', default='outputs/dj_cli_tagging/per_op')
+    parser.add_argument('--sample-dir', default='outputs/dj_cli_tagging/samples')
+    parser.add_argument('--log-dir', default='outputs/dj_cli_tagging/logs')
     parser.add_argument('--tagged-dir', default='data/processed/domain_tags')
     parser.add_argument('--filtered-dir', default='data/processed/domain_filtered')
     parser.add_argument('--combined-path', default='data/processed/domain_filtered/all.jsonl')
     parser.add_argument('--summary-path', default='outputs/domain_labeling_summary.csv')
     parser.add_argument('--assignments-path', default='outputs/domain_assignment_counts.csv')
     parser.add_argument('--catalog-path', default='outputs/domain_operator_catalog.csv')
+    parser.add_argument('--dj-process-bin', default='dj-process')
+    parser.add_argument('--dj-analyze-bin', default='dj-analyze')
+    parser.add_argument('--np', type=int, default=4)
     parser.add_argument('--min-active-mappers', type=int, default=2)
-    parser.add_argument('--max-text-length', type=int, default=None)
     parser.add_argument('--max-records', type=int, default=None)
-    parser.add_argument('--progress-every', type=int, default=500)
-    parser.add_argument('--resume', action='store_true', help='Resume from existing per-corpus tagged/filtered outputs.')
+    parser.add_argument('--resume', action='store_true', help='Skip existing per-op CLI outputs and re-aggregate.')
+    parser.add_argument('--aggregate-only', action='store_true', help='Only aggregate existing CLI outputs without running dj-process/dj-analyze.')
     args = parser.parse_args()
-    from icdrbench.domain_labeling import (
-        build_domain_execution_plan,
-        domain_operator_catalog_frame,
-        process_corpus,
-    )
 
     root = ROOT
     corpora_cfg = load_domains_config(root / args.corpora_config)['corpora']
     domains_cfg = load_domains_config(root / args.domains_config)
     selected = set(args.corpora) if args.corpora else None
 
+    process_bin = resolve_bin(args.dj_process_bin)
+    analyze_bin = resolve_bin(args.dj_analyze_bin)
+    config_dir = root / args.config_dir
+    per_op_dir = root / args.per_op_dir
+    sample_dir = root / args.sample_dir
+    log_dir = root / args.log_dir
+
     plan = build_domain_execution_plan(domains_cfg)
+    supported_variants = [variant for variant in plan['execution_variants'] if is_supported_tagging_variant(variant)]
+    skipped_variants = [variant for variant in plan['execution_variants'] if not is_supported_tagging_variant(variant)]
+    if skipped_variants:
+        skipped_names = ', '.join(variant['name'] for variant in skipped_variants)
+        print(f'skipping unsupported tagging operators: {skipped_names}')
     catalog = domain_operator_catalog_frame(plan)
     catalog_path = root / args.catalog_path
     catalog_path.parent.mkdir(parents=True, exist_ok=True)
     catalog.to_csv(catalog_path, index=False)
     print(f'wrote operator catalog -> {catalog_path}')
 
-    summary_rows = []
-    assignment_rows = []
-    combined_handle = None
-    combined_path = root / args.combined_path
+    summary_rows: list[dict[str, Any]] = []
+    assignment_rows: list[dict[str, Any]] = []
+    combined_rows: list[dict[str, Any]] = []
 
-    try:
-        for corpus_name, corpus_cfg in corpora_cfg.items():
-            if selected and corpus_name not in selected:
-                continue
-            raw_path = _resolve_path(root, corpus_cfg['raw_path'])
-            if not raw_path.exists():
-                print(f'skip {corpus_name}: missing {raw_path}')
-                continue
+    for corpus_name, corpus_cfg in corpora_cfg.items():
+        if selected and corpus_name not in selected:
+            continue
 
-            if combined_handle is None:
-                combined_path.parent.mkdir(parents=True, exist_ok=True)
-                combined_mode = 'a' if args.resume and combined_path.exists() else 'w'
-                combined_handle = open(combined_path, combined_mode, encoding='utf-8')
+        raw_path = resolve_path(root, corpus_cfg['raw_path'])
+        if not raw_path.exists():
+            print(f'skip {corpus_name}: missing {raw_path}')
+            continue
 
-            tagged_path = root / args.tagged_dir / f'{corpus_name}.jsonl'
-            filtered_path = root / args.filtered_dir / f'{corpus_name}.jsonl'
-            total_records_hint = _count_jsonl_lines(raw_path)
-            if args.max_records is not None:
-                total_records_hint = min(total_records_hint, args.max_records)
-            summary_row, corpus_assignment_rows = process_corpus(
-                corpus_name=corpus_name,
-                raw_path=raw_path,
-                tagged_path=tagged_path,
-                filtered_path=filtered_path,
-                plan=plan,
-                field_map=corpus_cfg.get('field_map'),
-                defaults=corpus_cfg.get('defaults'),
-                min_active_mappers=args.min_active_mappers,
-                max_text_length=args.max_text_length,
-                max_records=args.max_records,
-                progress_every=args.progress_every,
-                total_records_hint=total_records_hint,
-                resume=args.resume,
-                combined_handle=combined_handle,
+        field_map = corpus_cfg.get('field_map')
+        defaults = corpus_cfg.get('defaults')
+        input_path = raw_path
+        if args.max_records is not None:
+            input_path = ensure_head_sample(raw_path, sample_dir / f'{corpus_name}-head{args.max_records}.jsonl', args.max_records)
+
+        corpus_records = iter_jsonl(input_path)
+        text_field = (field_map or {}).get('text', 'text')
+        per_op_results: dict[str, list[dict[str, Any]]] = {}
+
+        for variant in supported_variants:
+            op_key = variant['key']
+            op_name = variant['name']
+            op_kind = variant['kind']
+            params = dict(variant.get('params', {}))
+
+            corpus_config_dir = config_dir / corpus_name
+            corpus_output_dir = per_op_dir / corpus_name
+            corpus_config_dir.mkdir(parents=True, exist_ok=True)
+            corpus_output_dir.mkdir(parents=True, exist_ok=True)
+
+            export_path = corpus_output_dir / f'{op_key}.jsonl'
+            cfg_path = corpus_config_dir / f'{op_key}.yaml'
+            expected_path = export_path
+            if op_kind == 'mapper':
+                payload = build_process_cfg(
+                    dataset_path=input_path,
+                    export_path=export_path,
+                    op_name=op_name,
+                    params=params,
+                    np=args.np,
+                    project_name=f'icdrbench-{corpus_name}-{op_key}-process',
+                )
+                cmd = [process_bin, '--config', str(cfg_path)]
+                log_path = log_dir / corpus_name / f'{op_key}__process.log'
+            else:
+                payload = build_analyze_cfg(
+                    dataset_path=input_path,
+                    export_path=export_path,
+                    op_name=op_name,
+                    params=params,
+                    np=args.np,
+                    project_name=f'icdrbench-{corpus_name}-{op_key}-analyze',
+                )
+                cmd = [analyze_bin, '--config', str(cfg_path)]
+                expected_path = stats_path_for_export(export_path)
+                log_path = log_dir / corpus_name / f'{op_key}__analyze.log'
+
+            with cfg_path.open('w', encoding='utf-8') as f:
+                yaml.safe_dump(payload, f, sort_keys=False, allow_unicode=True)
+
+            if not args.aggregate_only:
+                should_run = not (args.resume and expected_path.exists())
+                if should_run:
+                    print(f'[{corpus_name}] running {op_kind} {op_name}')
+                    exit_code = run_command(cmd, log_path)
+                    if exit_code != 0:
+                        raise SystemExit(f'command failed ({exit_code}): {" ".join(cmd)}; see {log_path}')
+
+            if not expected_path.exists():
+                raise SystemExit(f'missing expected CLI output for {corpus_name}/{op_key}: {expected_path}')
+
+            if op_kind == 'mapper':
+                output_rows = iter_jsonl(export_path)
+                per_op_results[op_key] = aggregate_mapper_results(corpus_records, output_rows, text_field=text_field)
+            else:
+                stats_rows = iter_jsonl(expected_path)
+                if len(stats_rows) != len(corpus_records):
+                    raise ValueError(
+                        f'filter stats row count mismatch for {corpus_name}/{op_key}: input={len(corpus_records)} stats={len(stats_rows)}'
+                    )
+                per_op_results[op_key] = aggregate_filter_results(stats_rows, op_name=op_name, params=params)
+
+        tagged_rows: list[dict[str, Any]] = []
+        filtered_rows: list[dict[str, Any]] = []
+        best_candidate_assignments: Counter[str] = Counter()
+        kept_assignments: Counter[str] = Counter()
+        total_active_mapper_count = 0
+
+        for idx, record in enumerate(corpus_records):
+            operator_results = {key: per_op_results[key][idx] for key in per_op_results}
+            active_mapper_keys = [
+                key for key, result in operator_results.items() if plan['execution_variants_by_key'][key]['kind'] == 'mapper' and result.get('active')
+            ]
+            active_mapper_names = sorted({plan['execution_variants_by_key'][key]['name'] for key in active_mapper_keys})
+            unique_active_mapper_names = sorted(
+                {
+                    plan['execution_variants_by_key'][key]['name']
+                    for profile in plan['domain_profiles'].values()
+                    for key in profile.get('unique_mapper_keys', [])
+                    if key in active_mapper_keys
+                }
             )
-            summary_rows.append(summary_row)
-            assignment_rows.extend(corpus_assignment_rows)
-            print(
-                f"{corpus_name}: kept {summary_row['kept_records']} / {summary_row['total_records']} "
-                f"(assigned {summary_row['assigned_records']}) -> {filtered_path}"
-            )
-    finally:
-        if combined_handle is not None:
-            combined_handle.close()
+
+            preferred_domain = resolve_record_field(record, 'domain', field_map=field_map, defaults=defaults)
+            if preferred_domain not in plan['assignment_domains']:
+                preferred_domain = None
+
+            domain_candidates = rank_domain_candidates(operator_results, plan, preferred_domain=preferred_domain)
+            best_domain_candidate = None
+            if domain_candidates and domain_candidates[0]['matched_mapper_count'] > 0:
+                best_domain_candidate = domain_candidates[0]['domain']
+            assigned_domain = None
+            if best_domain_candidate is not None and len(active_mapper_names) >= args.min_active_mappers:
+                assigned_domain = best_domain_candidate
+
+            tag_payload = {
+                'id': resolve_record_field(record, 'id', field_map=field_map, defaults=defaults, fallback=idx),
+                'corpus': corpus_name,
+                'source_name': resolve_record_field(record, 'source_name', field_map=field_map, defaults=defaults, fallback=raw_path.stem),
+                'original_domain': resolve_record_field(record, 'domain', field_map=field_map, defaults=defaults),
+                'best_domain_candidate': best_domain_candidate,
+                'assigned_domain': assigned_domain,
+                'text_length': len(str(resolve_record_field(record, 'text', field_map=field_map, defaults=defaults, fallback=''))),
+                'active_mapper_count': len(active_mapper_names),
+                'active_mapper_names': active_mapper_names,
+                'unique_active_mapper_count': len(unique_active_mapper_names),
+                'unique_active_mapper_names': unique_active_mapper_names,
+                'keep': assigned_domain is not None and len(active_mapper_names) >= args.min_active_mappers,
+                'domain_candidates': domain_candidates,
+                'operators': operator_results,
+                'skipped_long_text': False,
+            }
+            tagged_rows.append(tag_payload)
+            total_active_mapper_count += tag_payload['active_mapper_count']
+
+            if best_domain_candidate is not None:
+                best_candidate_assignments[best_domain_candidate] += 1
+            if tag_payload['keep'] and assigned_domain is not None:
+                filtered_record = build_filtered_record(record, corpus_name, assigned_domain, tag_payload)
+                filtered_rows.append(filtered_record)
+                combined_rows.append(filtered_record)
+                kept_assignments[assigned_domain] += 1
+
+        tagged_path = root / args.tagged_dir / f'{corpus_name}.jsonl'
+        filtered_path = root / args.filtered_dir / f'{corpus_name}.jsonl'
+        write_jsonl(tagged_path, tagged_rows)
+        write_jsonl(filtered_path, filtered_rows)
+        print(f'{corpus_name}: kept {len(filtered_rows)} / {len(tagged_rows)} (assigned {sum(best_candidate_assignments.values())}) -> {filtered_path}')
+
+        summary_rows.append(
+            {
+                'corpus': corpus_name,
+                'total_records': len(tagged_rows),
+                'best_candidate_records': sum(best_candidate_assignments.values()),
+                'assigned_records': sum(kept_assignments.values()),
+                'kept_records': len(filtered_rows),
+                'dropped_records': len(tagged_rows) - len(filtered_rows),
+                'insufficient_mapper_records': sum(1 for row in tagged_rows if row['active_mapper_count'] < args.min_active_mappers),
+                'skipped_long_text_records': 0,
+                'mean_active_mapper_count': (total_active_mapper_count / len(tagged_rows)) if tagged_rows else 0.0,
+                'keep_rate': (len(filtered_rows) / len(tagged_rows)) if tagged_rows else 0.0,
+            }
+        )
+        for domain_name, count in sorted(best_candidate_assignments.items()):
+            assignment_rows.append({'corpus': corpus_name, 'scope': 'best_candidate', 'assigned_domain': domain_name, 'count': count})
+        for domain_name, count in sorted(kept_assignments.items()):
+            assignment_rows.append({'corpus': corpus_name, 'scope': 'kept', 'assigned_domain': domain_name, 'count': count})
 
     if not summary_rows:
         print('no corpora were processed')
         return
+
+    combined_path = root / args.combined_path
+    write_jsonl(combined_path, combined_rows)
 
     summary = pd.DataFrame(summary_rows)
     summary_path = root / args.summary_path
@@ -124,15 +471,11 @@ def main() -> None:
     summary.to_csv(summary_path, index=False)
     print(f'wrote summary -> {summary_path}')
 
-    assignments = pd.DataFrame(
-        assignment_rows,
-        columns=['corpus', 'scope', 'assigned_domain', 'count'],
-    )
+    assignments = pd.DataFrame(assignment_rows, columns=['corpus', 'scope', 'assigned_domain', 'count'])
     assignments_path = root / args.assignments_path
     assignments_path.parent.mkdir(parents=True, exist_ok=True)
     assignments.to_csv(assignments_path, index=False)
     print(f'wrote assignment counts -> {assignments_path}')
-
     print(f'wrote combined filtered corpus -> {combined_path}')
 
 
