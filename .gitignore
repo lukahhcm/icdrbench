@@ -13,6 +13,8 @@ venv/
 # Data artifacts
 data/
 outputs/
+!data-juicer/data_juicer/core/data/
+!data-juicer/data_juicer/core/data/**
 
 # Local logs / temp files
 *.log
