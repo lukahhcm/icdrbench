@@ -160,7 +160,16 @@ def build_dj_invocation(
         env['PYTHONPATH'] = f'{repo_pythonpath}{os.pathsep}{existing_pythonpath}' if existing_pythonpath else repo_pythonpath
         resolved_python = resolve_bin(dj_python)
         repo_script = dj_repo_root / repo_script_relpath
-        return [resolved_python, str(repo_script)], env, f'repo:{repo_script}'
+        bootstrap = (
+            'import runpy, sys; '
+            'repo_root = sys.argv[1]; '
+            'script_path = sys.argv[2]; '
+            'sys.path.insert(0, repo_root); '
+            'stale = [name for name in sys.modules if name == "data_juicer" or name.startswith("data_juicer.")]; '
+            '[sys.modules.pop(name, None) for name in stale]; '
+            'runpy.run_path(script_path, run_name="__main__")'
+        )
+        return [resolved_python, '-c', bootstrap, str(dj_repo_root), str(repo_script)], env, f'repo:{repo_script}'
 
     return [resolve_bin(default_bin)], None, f'bin:{default_bin}'
 
