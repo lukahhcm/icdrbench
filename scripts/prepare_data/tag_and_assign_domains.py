@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from collections import Counter
@@ -100,6 +101,13 @@ def resolve_bin(raw: str) -> str:
     return raw
 
 
+def resolve_repo_dir(root: Path, raw_path_value: str | None) -> Path | None:
+    if not raw_path_value:
+        return None
+    repo_dir = resolve_path(root, raw_path_value)
+    return repo_dir if repo_dir.exists() else None
+
+
 def build_process_cfg(dataset_path: Path, export_path: Path, op_name: str, params: dict[str, Any], np: int, project_name: str) -> dict[str, Any]:
     return {
         'project_name': project_name,
@@ -126,11 +134,34 @@ def stats_path_for_export(export_path: Path) -> Path:
     return export_path.with_name(f'{export_path.stem}_stats.jsonl')
 
 
-def run_command(cmd: list[str], log_path: Path) -> int:
+def run_command(cmd: list[str], log_path: Path, *, env: dict[str, str] | None = None) -> int:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open('w', encoding='utf-8') as lf:
-        proc = subprocess.run(cmd, stdout=lf, stderr=subprocess.STDOUT, check=False)
+        proc = subprocess.run(cmd, stdout=lf, stderr=subprocess.STDOUT, check=False, env=env)
     return proc.returncode
+
+
+def build_dj_invocation(
+    *,
+    explicit_bin: str,
+    default_bin: str,
+    dj_python: str,
+    dj_repo_root: Path | None,
+    module_name: str,
+) -> tuple[list[str], dict[str, str] | None, str]:
+    if explicit_bin != default_bin:
+        resolved_bin = resolve_bin(explicit_bin)
+        return [resolved_bin], None, f'bin:{resolved_bin}'
+
+    if dj_repo_root is not None:
+        env = os.environ.copy()
+        existing_pythonpath = env.get('PYTHONPATH')
+        repo_pythonpath = str(dj_repo_root)
+        env['PYTHONPATH'] = f'{repo_pythonpath}{os.pathsep}{existing_pythonpath}' if existing_pythonpath else repo_pythonpath
+        resolved_python = resolve_bin(dj_python)
+        return [resolved_python, '-m', module_name], env, f'repo:{dj_repo_root}'
+
+    return [resolve_bin(default_bin)], None, f'bin:{default_bin}'
 
 
 def resolve_record_field(record: dict[str, Any], field_name: str, field_map: dict[str, str] | None = None, defaults: dict[str, Any] | None = None, fallback: Any = None) -> Any:
@@ -255,6 +286,12 @@ def main() -> None:
     parser.add_argument('--catalog-path', default='outputs/domain_operator_catalog.csv')
     parser.add_argument('--dj-process-bin', default='dj-process')
     parser.add_argument('--dj-analyze-bin', default='dj-analyze')
+    parser.add_argument('--dj-python', default=sys.executable, help='Python executable used for repo-local Data-Juicer mode.')
+    parser.add_argument(
+        '--dj-repo-root',
+        default='data-juicer',
+        help='Repo-local Data-Juicer checkout. If this directory exists and custom CLI bins are not provided, tagging uses python -m data_juicer.tools.* with this repo injected into PYTHONPATH.',
+    )
     parser.add_argument('--np', type=int, default=4)
     parser.add_argument('--min-active-mappers', type=int, default=2)
     parser.add_argument('--max-records', type=int, default=None)
@@ -267,12 +304,31 @@ def main() -> None:
     domains_cfg = load_domains_config(root / args.domains_config)
     selected = set(args.corpora) if args.corpora else None
 
-    process_bin = resolve_bin(args.dj_process_bin)
-    analyze_bin = resolve_bin(args.dj_analyze_bin)
+    dj_repo_root = resolve_repo_dir(root, args.dj_repo_root)
+    process_cmd_prefix, process_env, process_mode = build_dj_invocation(
+        explicit_bin=args.dj_process_bin,
+        default_bin='dj-process',
+        dj_python=args.dj_python,
+        dj_repo_root=dj_repo_root,
+        module_name='data_juicer.tools.process_data',
+    )
+    analyze_cmd_prefix, analyze_env, analyze_mode = build_dj_invocation(
+        explicit_bin=args.dj_analyze_bin,
+        default_bin='dj-analyze',
+        dj_python=args.dj_python,
+        dj_repo_root=dj_repo_root,
+        module_name='data_juicer.tools.analyze_data',
+    )
     config_dir = root / args.config_dir
     per_op_dir = root / args.per_op_dir
     sample_dir = root / args.sample_dir
     log_dir = root / args.log_dir
+
+    if dj_repo_root is not None and args.dj_process_bin == 'dj-process' and args.dj_analyze_bin == 'dj-analyze':
+        print(f'using repo-local Data-Juicer checkout -> {dj_repo_root}')
+    else:
+        print(f'using Data-Juicer process entry -> {process_mode}')
+        print(f'using Data-Juicer analyze entry -> {analyze_mode}')
 
     plan = build_domain_execution_plan(domains_cfg)
     supported_variants = [variant for variant in plan['execution_variants'] if is_supported_tagging_variant(variant)]
@@ -332,7 +388,8 @@ def main() -> None:
                     np=args.np,
                     project_name=f'icdrbench-{corpus_name}-{op_key}-process',
                 )
-                cmd = [process_bin, '--config', str(cfg_path)]
+                cmd = [*process_cmd_prefix, '--config', str(cfg_path)]
+                cmd_env = process_env
                 log_path = log_dir / corpus_name / f'{op_key}__process.log'
             else:
                 payload = build_analyze_cfg(
@@ -343,7 +400,8 @@ def main() -> None:
                     np=args.np,
                     project_name=f'icdrbench-{corpus_name}-{op_key}-analyze',
                 )
-                cmd = [analyze_bin, '--config', str(cfg_path)]
+                cmd = [*analyze_cmd_prefix, '--config', str(cfg_path)]
+                cmd_env = analyze_env
                 expected_path = stats_path_for_export(export_path)
                 log_path = log_dir / corpus_name / f'{op_key}__analyze.log'
 
@@ -354,7 +412,7 @@ def main() -> None:
                 should_run = not (args.resume and expected_path.exists())
                 if should_run:
                     print(f'[{corpus_name}] running {op_kind} {op_name}')
-                    exit_code = run_command(cmd, log_path)
+                    exit_code = run_command(cmd, log_path, env=cmd_env)
                     if exit_code != 0:
                         raise SystemExit(f'command failed ({exit_code}): {" ".join(cmd)}; see {log_path}')
 

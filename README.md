@@ -18,7 +18,7 @@ git clone https://github.com/lukahhcm/icdrbench.git
 cd icdrbench
 ```
 
-## 2. 准备 Data-Juicer CLI 环境
+## 2. 准备环境
 
 如果服务器还没装 `uv`，先安装：
 
@@ -26,12 +26,7 @@ cd icdrbench
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-如果你服务器上已经有能直接运行的 `dj-process` / `dj-analyze` 环境，这一步可以跳过。否则可以单独拉一份 `data-juicer`：
-
-```bash
-git clone https://github.com/datajuicer/data-juicer.git /path/to/data-juicer
-export ICDRBENCH_DATA_JUICER_ROOT=/path/to/data-juicer
-```
+这个仓库已经自带 `data-juicer/`，里面包含 ICDR-Bench 当前用到的定制算子，所以默认不需要你再单独 clone 一份 DJ repo。
 
 推荐再用 `uv` 建一个单独环境，后面 HF 下载和聚合脚本都用这个环境跑：
 
@@ -41,7 +36,14 @@ uv pip install --python .venv-ops/bin/python -e .
 uv pip install --python .venv-ops/bin/python -U huggingface_hub py-data-juicer
 ```
 
-如果 `data-juicer` 就放在仓库根目录下的 `./data-juicer`，可以不设 `ICDRBENCH_DATA_JUICER_ROOT`。主打标脚本实际调用的是 `dj-process` 和 `dj-analyze`。
+主打标脚本默认会优先走仓库里的：
+
+```bash
+python -m data_juicer.tools.process_data
+python -m data_juicer.tools.analyze_data
+```
+
+并自动把 `./data-juicer` 注入到 `PYTHONPATH`。只有在仓库里没有这份目录时，才会退回系统里的 `dj-process` / `dj-analyze`。
 
 这些脚本现在会自动把仓库里的 `src/` 加到 `sys.path`，所以不需要额外设置 `PYTHONPATH=src`。
 
@@ -68,6 +70,8 @@ HF_TOKEN=<your_hf_token_if_needed> \
 
 ## 4. 用 Data-Juicer CLI 打标
 
+因为仓库已经自带 `./data-juicer`，最短就是直接这样跑。
+
 先小规模试跑：
 
 ```bash
@@ -80,12 +84,21 @@ HF_TOKEN=<your_hf_token_if_needed> \
 .venv-ops/bin/python scripts/prepare_data/tag_and_assign_domains.py --resume
 ```
 
-如果你的环境里 `dj-process` / `dj-analyze` 不在默认 PATH，可以显式传：
+如果你想强制改用系统里的 `dj-process` / `dj-analyze`，可以这样传：
 
 ```bash
 .venv-ops/bin/python scripts/prepare_data/tag_and_assign_domains.py \
   --dj-process-bin /path/to/dj-process \
   --dj-analyze-bin /path/to/dj-analyze \
+  --resume
+```
+
+如果你以后把 `data-juicer` 挪到别处，也可以显式指定 repo 路径和 Python：
+
+```bash
+.venv-ops/bin/python scripts/prepare_data/tag_and_assign_domains.py \
+  --dj-repo-root /path/to/data-juicer \
+  --dj-python /usr/bin/python3 \
   --resume
 ```
 

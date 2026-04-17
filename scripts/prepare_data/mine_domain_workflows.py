@@ -220,9 +220,9 @@ def _build_domain_report(
     workflow_rows = []
     workflow_yaml_rows = []
     assigned_signatures: set[tuple[str, ...]] = set()
+    kept_families: list[dict[str, Any]] = []
 
     for family_idx, family in enumerate(families, start=1):
-        family_id = f'{domain}_family_{family_idx:02d}'
         anchor = tuple(family['operators'])
         assigned = []
         for signature, support in exact_counts.most_common():
@@ -242,22 +242,36 @@ def _build_domain_report(
         if not selected_workflows:
             continue
         family_support = sum(support for _, support in assigned)
+        kept_families.append(
+            {
+                'anchor': anchor,
+                'subset_support': family['subset_support'],
+                'family_support': family_support,
+                'selected_workflows': selected_workflows,
+            }
+        )
+
+    for kept_family_idx, kept_family in enumerate(kept_families, start=1):
+        family_id = f'{domain}_family_{kept_family_idx:02d}'
+        anchor = tuple(kept_family['anchor'])
+        selected_workflows = list(kept_family['selected_workflows'])
+
         family_rows.append(
             {
                 'domain': domain,
                 'family_id': family_id,
                 'anchor_operators': ' | '.join(anchor),
                 'anchor_length': len(anchor),
-                'subset_support': family['subset_support'],
-                'family_support': family_support,
-                'family_support_ratio': family_support / num_records if num_records else 0.0,
+                'subset_support': kept_family['subset_support'],
+                'family_support': kept_family['family_support'],
+                'family_support_ratio': kept_family['family_support'] / num_records if num_records else 0.0,
                 'num_concrete_workflow_candidates': len(selected_workflows),
             }
         )
 
         yaml_workflows = []
         for workflow_rank, (ops, support) in enumerate(selected_workflows, start=1):
-            workflow_id = f'{domain}_wf_{family_idx:02d}_{workflow_rank:02d}'
+            workflow_id = f'{domain}_wf_{kept_family_idx:02d}_{workflow_rank:02d}'
             workflow_rows.append(
                 {
                     'domain': domain,
@@ -287,9 +301,9 @@ def _build_domain_report(
                 'family_id': family_id,
                 'anchor_operator_set': list(anchor),
                 'anchor_length': len(anchor),
-                'subset_support': family['subset_support'],
-                'family_support': family_support,
-                'family_support_ratio': round(family_support / num_records, 6) if num_records else 0.0,
+                'subset_support': kept_family['subset_support'],
+                'family_support': kept_family['family_support'],
+                'family_support_ratio': round(kept_family['family_support'] / num_records, 6) if num_records else 0.0,
                 'concrete_workflows': yaml_workflows,
             }
         )

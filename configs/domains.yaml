@@ -80,9 +80,23 @@ domains:
         kind: mapper
       - name: clean_ip_mapper
         kind: mapper
-      - name: clean_links_mapper
+      - name: clean_path_mapper
         kind: mapper
-      - name: pii_redaction_mapper
+      - name: clean_phone_mapper
+        kind: mapper
+      - name: clean_id_card_mapper
+        kind: mapper
+      - name: clean_secret_mapper
+        kind: mapper
+      - name: clean_channel_id_mapper
+        kind: mapper
+      - name: clean_jwt_mapper
+        kind: mapper
+      - name: clean_pem_mapper
+        kind: mapper
+      - name: clean_mac_mapper
+        kind: mapper
+      - name: clean_links_mapper
         kind: mapper
       - name: remove_words_with_incorrect_substrings_mapper
         kind: mapper
