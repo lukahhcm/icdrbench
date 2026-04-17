@@ -115,6 +115,8 @@ HF_TOKEN=<your_hf_token_if_needed> \
   --output-dir outputs/workflow_mining
 ```
 
+默认规则里，某个具体 workflow 至少要有 `5` 条样本支持，才会被保留为有效 workflow candidate。这个阈值可以用 `--min-workflow-support` 调整。
+
 输出文件：
 
 - `outputs/workflow_mining/<domain>/workflow_families.csv`

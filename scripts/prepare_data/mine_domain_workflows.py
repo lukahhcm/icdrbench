@@ -164,6 +164,7 @@ def _build_domain_report(
     records: list[dict[str, Any]],
     domain_cfg: dict[str, Any],
     min_support: int,
+    min_workflow_support: int,
     min_support_ratio: float,
     min_combo_len: int,
     max_combo_len: int,
@@ -236,7 +237,10 @@ def _build_domain_report(
             continue
 
         assigned.sort(key=lambda item: (-item[1], -len(item[0]), item[0]))
-        selected_workflows = assigned[:max_workflows_per_family]
+        valid_assigned = [(ops, support) for ops, support in assigned if support >= min_workflow_support]
+        selected_workflows = valid_assigned[:max_workflows_per_family]
+        if not selected_workflows:
+            continue
         family_support = sum(support for _, support in assigned)
         family_rows.append(
             {
@@ -290,7 +294,11 @@ def _build_domain_report(
             }
         )
 
-    leftover_exact = [(ops, support) for ops, support in exact_counts.most_common() if ops not in assigned_signatures]
+    leftover_exact = [
+        (ops, support)
+        for ops, support in exact_counts.most_common()
+        if ops not in assigned_signatures and support >= min_workflow_support
+    ]
     fallback_rows = []
     for rank, ops in enumerate(_select_cover_workflows(dict(leftover_exact), max_candidates=min(top_k, 12)), start=1):
         support = exact_counts[ops]
@@ -311,6 +319,7 @@ def _build_domain_report(
         'description': domain_cfg.get('description', ''),
         'num_records': num_records,
         'min_support_threshold': threshold,
+        'min_workflow_support': min_workflow_support,
         'active_operator_inventory': all_active_ops,
         'configured_specific_operators': [op['name'] for op in domain_cfg.get('specific_operators', [])],
         'source_corpora': dict(source_counter),
@@ -328,6 +337,7 @@ def _build_domain_report(
         ],
         'notes': [
             'Bottom-up mining is based on active operator sets from tagging outputs.',
+            f'Concrete workflows are only kept if support >= {min_workflow_support}.',
             'Concrete workflow candidates still need manual ordering and activation-spec curation.',
         ],
     }
@@ -351,6 +361,7 @@ def main() -> None:
     parser.add_argument('--domain-field', choices=['assigned_domain', 'best_domain_candidate'], default='assigned_domain')
     parser.add_argument('--min-active-mappers', type=int, default=2)
     parser.add_argument('--min-support', type=int, default=5)
+    parser.add_argument('--min-workflow-support', type=int, default=5)
     parser.add_argument('--min-support-ratio', type=float, default=0.02)
     parser.add_argument('--min-combo-len', type=int, default=2)
     parser.add_argument('--max-combo-len', type=int, default=5)
@@ -392,6 +403,7 @@ def main() -> None:
             records=records,
             domain_cfg=domain_defs[domain],
             min_support=args.min_support,
+            min_workflow_support=args.min_workflow_support,
             min_support_ratio=args.min_support_ratio,
             min_combo_len=args.min_combo_len,
             max_combo_len=args.max_combo_len,
@@ -432,6 +444,7 @@ def main() -> None:
                 'num_workflow_families': len(family_df),
                 'num_selected_workflows': len(workflow_df),
                 'min_support_threshold': report['min_support_threshold'],
+                'min_workflow_support': report['min_workflow_support'],
             }
         )
 
