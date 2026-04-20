@@ -188,6 +188,17 @@ sed -n '1,160p' data/processed/workflow_mining/web/workflow_candidates.yaml
 3. 补 activation spec
 4. 再做 workflow-level executor validation
 
+如果你后面要把 workflow 自动转成自然语言指令，可以直接参考：
+
+- `configs/workflow_prompting.yaml`
+
+这个文件现在已经记录了：
+
+- `extract_tables_from_html_mapper` 的自然语言意图
+- 它在 benchmark 里的文本输出约定
+- TSV 序列化规范
+- 后续 `workflow -> prompt` 代码可以直接复用的 prompt template
+
 ## 7. 最终你会拿到什么
 
 如果整条流程跑完，当前 repo 里最重要的产物是：

@@ -1,0 +1,55 @@
+version: 1
+
+global_prompting_rules:
+  output_should_be_plain_text: true
+  avoid_markdown_code_fences: true
+  avoid_explanatory_prefix_suffix: true
+  preserve_operator_order: true
+  note: >
+    This file records operator-to-natural-language rendering hints for future
+    workflow-to-prompt generation. A prompt generator can combine the operator
+    templates in workflow order and append the output contract of the final
+    operator chain.
+
+serialization_specs:
+  tsv_tables_v1:
+    description: Serialize extracted HTML tables as plain TSV text.
+    output_type: text
+    cell_separator: "\t"
+    row_separator: "\n"
+    table_separator: "\n\n"
+    keep_header: true
+    cell_text_normalization: get_text_strip_true
+    no_table_behavior: leave_text_unchanged
+    model_output_contract:
+      - Output plain text only.
+      - Do not wrap the answer in Markdown code fences.
+      - Use a tab character between cells.
+      - Use a newline between rows.
+      - Use one blank line between tables.
+      - Preserve table headers when present.
+      - Do not add titles, bullets, commentary, or explanations.
+
+operators:
+  extract_tables_from_html_mapper:
+    benchmark_output_type: text
+    serialization_spec: tsv_tables_v1
+    natural_language_intent: Extract tables from HTML and serialize them into TSV text.
+    prompt_template: >
+      Extract every table from the HTML content and output the tables as plain
+      TSV text. Use tabs between cells, newlines between rows, and one blank
+      line between tables. Preserve table headers when present. Do not add any
+      explanation or Markdown formatting.
+    config_variants:
+      default_benchmark_variant:
+        params:
+          output_mode: text
+          text_output_format: tsv
+      meta_tagging_variant:
+        params:
+          output_mode: meta
+
+future_extension_notes:
+  - Add natural-language templates for other mappers and filters as workflows stabilize.
+  - Add chain-level composition rules when workflow-to-prompt generation is implemented.
+  - Add normalization rules for evaluator-side canonicalization if prompt outputs are sensitive to whitespace.
