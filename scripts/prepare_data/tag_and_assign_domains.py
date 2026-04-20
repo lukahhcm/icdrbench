@@ -269,6 +269,65 @@ def resolve_record_field(record: dict[str, Any], field_name: str, field_map: dic
     return fallback
 
 
+def infer_suffix_from_record(
+    record: dict[str, Any],
+    *,
+    raw_path: Path,
+    field_map: dict[str, str] | None = None,
+) -> str:
+    field_map = field_map or {}
+
+    suffix_field = field_map.get('suffix', 'suffix')
+    suffix = record.get(suffix_field)
+    if isinstance(suffix, str) and suffix:
+        return suffix
+
+    url_field = field_map.get('url', 'url')
+    url = record.get(url_field)
+    if isinstance(url, str) and url:
+        candidate = Path(url).suffix
+        if candidate:
+            return candidate
+
+    source_name_field = field_map.get('source_name', 'source_name')
+    source_name = record.get(source_name_field)
+    if isinstance(source_name, str) and source_name:
+        candidate = Path(source_name).suffix
+        if candidate:
+            return candidate
+
+    return raw_path.suffix
+
+
+def build_cli_input_rows(
+    records: list[dict[str, Any]],
+    *,
+    raw_path: Path,
+    field_map: dict[str, str] | None = None,
+    defaults: dict[str, Any] | None = None,
+    corpus_name: str,
+) -> list[dict[str, Any]]:
+    field_map = field_map or {}
+    defaults = defaults or {}
+
+    rows: list[dict[str, Any]] = []
+    for idx, record in enumerate(records):
+        rows.append(
+            {
+                'id': resolve_record_field(record, 'id', field_map=field_map, defaults=defaults, fallback=idx),
+                'text': str(resolve_record_field(record, 'text', field_map=field_map, defaults=defaults, fallback='') or ''),
+                'domain': resolve_record_field(record, 'domain', field_map=field_map, defaults=defaults),
+                'source_name': resolve_record_field(
+                    record, 'source_name', field_map=field_map, defaults=defaults, fallback=raw_path.stem
+                ),
+                'url': resolve_record_field(record, 'url', field_map=field_map, defaults=defaults),
+                'suffix': infer_suffix_from_record(record, raw_path=raw_path, field_map=field_map),
+                'corpus': corpus_name,
+            }
+        )
+    return rows
+
+
 def get_keep_boolean(
     value: float | int | None,
     min_val: float | int | None,
@@ -478,12 +537,29 @@ def main() -> None:
 
         field_map = corpus_cfg.get('field_map')
         defaults = corpus_cfg.get('defaults')
-        input_path = raw_path
+        input_source_path = raw_path
         if args.max_records is not None:
-            input_path = ensure_head_sample(raw_path, sample_dir / f'{corpus_name}-head{args.max_records}.jsonl', args.max_records)
+            input_source_path = ensure_head_sample(
+                raw_path, sample_dir / f'{corpus_name}-head{args.max_records}.jsonl', args.max_records
+            )
 
-        corpus_records = iter_jsonl(input_path)
-        text_field = (field_map or {}).get('text', 'text')
+        raw_records = iter_jsonl(input_source_path)
+        cli_input_rows = build_cli_input_rows(
+            raw_records,
+            raw_path=raw_path,
+            field_map=field_map,
+            defaults=defaults,
+            corpus_name=corpus_name,
+        )
+        cli_input_path = sample_dir / f'{corpus_name}-djcli.jsonl'
+        if args.max_records is not None:
+            cli_input_path = sample_dir / f'{corpus_name}-head{args.max_records}-djcli.jsonl'
+        write_jsonl(cli_input_path, cli_input_rows)
+
+        input_path = cli_input_path
+        corpus_records = raw_records
+        dj_input_records = cli_input_rows
+        text_field = 'text'
         per_op_results: dict[str, list[dict[str, Any]]] = {}
 
         for variant in supported_variants:
@@ -547,7 +623,7 @@ def main() -> None:
             if op_kind == 'mapper' and not use_analyze_for_mapper:
                 output_rows = load_cli_rows_with_recovery(
                     expected_path=export_path,
-                    expected_count=len(corpus_records),
+                    expected_count=len(dj_input_records),
                     kind_label='mapper output',
                     corpus_name=corpus_name,
                     op_key=op_key,
@@ -558,11 +634,11 @@ def main() -> None:
                     aggregate_only=args.aggregate_only,
                     resume=args.resume,
                 )
-                per_op_results[op_key] = aggregate_mapper_results(corpus_records, output_rows, text_field=text_field)
+                per_op_results[op_key] = aggregate_mapper_results(dj_input_records, output_rows, text_field=text_field)
             elif op_kind == 'mapper':
                 stats_rows = load_cli_rows_with_recovery(
                     expected_path=expected_path,
-                    expected_count=len(corpus_records),
+                    expected_count=len(dj_input_records),
                     kind_label='tagging mapper stats',
                     corpus_name=corpus_name,
                     op_key=op_key,
@@ -577,7 +653,7 @@ def main() -> None:
             else:
                 stats_rows = load_cli_rows_with_recovery(
                     expected_path=expected_path,
-                    expected_count=len(corpus_records),
+                    expected_count=len(dj_input_records),
                     kind_label='filter stats',
                     corpus_name=corpus_name,
                     op_key=op_key,
