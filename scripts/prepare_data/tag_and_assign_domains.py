@@ -93,6 +93,48 @@ def iter_jsonl(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def load_cli_rows_with_recovery(
+    *,
+    expected_path: Path,
+    expected_count: int,
+    kind_label: str,
+    corpus_name: str,
+    op_key: str,
+    cleanup_paths: list[Path],
+    cmd: list[str],
+    log_path: Path,
+    cmd_env: dict[str, str] | None,
+    aggregate_only: bool,
+    resume: bool,
+) -> list[dict[str, Any]]:
+    rows = iter_jsonl(expected_path)
+    if len(rows) == expected_count:
+        return rows
+
+    message = (
+        f'{kind_label} row count mismatch for {corpus_name}/{op_key}: '
+        f'expected={expected_count} actual={len(rows)} path={expected_path}'
+    )
+    if aggregate_only or not resume:
+        raise ValueError(message)
+
+    print(f'[{corpus_name}] recovering stale CLI output for {op_key}: expected {expected_count}, found {len(rows)}')
+    for path in cleanup_paths:
+        if path.exists():
+            path.unlink()
+
+    exit_code = run_command(cmd, log_path, env=cmd_env)
+    if exit_code != 0:
+        raise SystemExit(f'command failed ({exit_code}) during recovery: {" ".join(cmd)}; see {log_path}')
+    if not expected_path.exists():
+        raise SystemExit(f'missing expected CLI output after recovery for {corpus_name}/{op_key}: {expected_path}')
+
+    rows = iter_jsonl(expected_path)
+    if len(rows) != expected_count:
+        raise ValueError(message)
+    return rows
+
+
 def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open('w', encoding='utf-8') as f:
@@ -491,21 +533,49 @@ def main() -> None:
                 raise SystemExit(f'missing expected CLI output for {corpus_name}/{op_key}: {expected_path}')
 
             if op_kind == 'mapper' and not use_analyze_for_mapper:
-                output_rows = iter_jsonl(export_path)
+                output_rows = load_cli_rows_with_recovery(
+                    expected_path=export_path,
+                    expected_count=len(corpus_records),
+                    kind_label='mapper output',
+                    corpus_name=corpus_name,
+                    op_key=op_key,
+                    cleanup_paths=[export_path],
+                    cmd=cmd,
+                    log_path=log_path,
+                    cmd_env=cmd_env,
+                    aggregate_only=args.aggregate_only,
+                    resume=args.resume,
+                )
                 per_op_results[op_key] = aggregate_mapper_results(corpus_records, output_rows, text_field=text_field)
             elif op_kind == 'mapper':
-                stats_rows = iter_jsonl(expected_path)
-                if len(stats_rows) != len(corpus_records):
-                    raise ValueError(
-                        f'tagging mapper stats row count mismatch for {corpus_name}/{op_key}: input={len(corpus_records)} stats={len(stats_rows)}'
-                    )
+                stats_rows = load_cli_rows_with_recovery(
+                    expected_path=expected_path,
+                    expected_count=len(corpus_records),
+                    kind_label='tagging mapper stats',
+                    corpus_name=corpus_name,
+                    op_key=op_key,
+                    cleanup_paths=[expected_path, export_path],
+                    cmd=cmd,
+                    log_path=log_path,
+                    cmd_env=cmd_env,
+                    aggregate_only=args.aggregate_only,
+                    resume=args.resume,
+                )
                 per_op_results[op_key] = aggregate_tagging_mapper_results(stats_rows, op_name=op_name)
             else:
-                stats_rows = iter_jsonl(expected_path)
-                if len(stats_rows) != len(corpus_records):
-                    raise ValueError(
-                        f'filter stats row count mismatch for {corpus_name}/{op_key}: input={len(corpus_records)} stats={len(stats_rows)}'
-                    )
+                stats_rows = load_cli_rows_with_recovery(
+                    expected_path=expected_path,
+                    expected_count=len(corpus_records),
+                    kind_label='filter stats',
+                    corpus_name=corpus_name,
+                    op_key=op_key,
+                    cleanup_paths=[expected_path, export_path],
+                    cmd=cmd,
+                    log_path=log_path,
+                    cmd_env=cmd_env,
+                    aggregate_only=args.aggregate_only,
+                    resume=args.resume,
+                )
                 per_op_results[op_key] = aggregate_filter_results(stats_rows, op_name=op_name, params=params)
 
         tagged_rows: list[dict[str, Any]] = []
