@@ -9,7 +9,7 @@
 1. 下载 raw JSONL 到 `data/raw/`
 2. 用 `tag_and_assign_domains.py` 跑 Data-Juicer CLI 打标
 3. 用 `mine_domain_workflows.py` 从 `domain_tags` 里挖 workflow families 和 concrete workflow candidates
-4. 用 `materialize_domain_workflows.py` 把 mapper skeleton 落成一版带 filter 插入建议的 workflow library
+4. 用 `materialize_domain_workflows.py` 把 mapper skeleton 落成主榜和顺序敏感拓展两版 workflow library
 5. 查看 `data/processed/workflow_library/<domain>/workflow_library.yaml`，再做最终人工筛选
 
 ## 1. 拉代码
@@ -190,9 +190,9 @@ sed -n '1,160p' data/processed/workflow_mining/web/workflow_candidates.yaml
 3. 补 activation spec
 4. 再做 workflow-level executor validation
 
-## 7. 直接产出一版 workflow library
+## 7. 直接产出 workflow library
 
-如果你不想停在 mapper operator set，而是想直接拿到“一版可用 workflow 草案”，继续跑：
+如果你不想停在 mapper operator set，而是想直接拿到一版可用 workflow 草案，继续跑：
 
 ```bash
 .venv-ops/bin/python scripts/prepare_data/materialize_domain_workflows.py \
@@ -204,29 +204,60 @@ sed -n '1,160p' data/processed/workflow_mining/web/workflow_candidates.yaml
 这一步会做三件事：
 
 1. 按 domain 配置里的 operator 顺序，把 mapper set 排成一条确定的 mapper sequence
-2. 在支持这些 mapper 的真实样本上重放 mapper prefixes
-3. 对每个 checkpoint 评估 filter，给出推荐的 filter 插入位置和一版 materialized workflow variants
+2. 在支持这些 mapper 的真实样本上重放 mapper prefixes，形成 `S0, S1, ..., Sfinal` 中间状态
+3. 对每个 checkpoint 扫描 filter status 分布，并产出主榜和顺序敏感拓展实验的 workflow variants
+
+这里的 filter 不直接相信 DJ 默认阈值。脚本会先记录每个 checkpoint 的统计量分布，再用一个简单的分位数规则生成 provisional calibrated params：
+
+- `min` 型 filter 默认用 `p20` 作为下界
+- `max` 型 filter 默认用 `p80` 作为上界
+- 完整分布会保存在 `checkpoint_filter_stats.csv`，后续可以人工或自动重新调阈值
 
 输出文件：
 
 - `data/processed/workflow_library/<domain>/workflow_library.yaml`
 - `data/processed/workflow_library/<domain>/workflow_variants.csv`
 - `data/processed/workflow_library/<domain>/filter_attachments.csv`
+- `data/processed/workflow_library/<domain>/checkpoint_filter_stats.csv`
+- `data/processed/workflow_library/<domain>/order_sensitivity_candidates.csv`
 - `data/processed/workflow_library/workflow_library_summary.csv`
 
 其中最重要的是：
 
 - `workflow_library.yaml`
   里面会同时给出：
-  - `ordered_mapper_sequence`
-  - `recommended_filter_attachments`
-  - `workflow_variants`
-  - `recommended_workflow_variant_id`
+  - `ordered_clean_sequence`
+  - `main_workflow_variants`
+  - `order_sensitivity_variants`
+  - `selected_filter_attachments`
 
-你可以把这一步理解成：
+主榜目前固定分成三类：
+
+- `clean-only`
+- `filter-then-clean`
+- `clean-then-filter`
+
+顺序敏感拓展实验单独放在：
+
+- `clean-filter-clean`
+- `order_sensitivity_candidates.csv`
+
+可以把这一步理解成：
 
 - `workflow_mining` 产出 mapper skeleton
-- `workflow_library` 产出第一版完整 workflow 草案
+- `workflow_library` 产出可用于主榜和拓展实验的完整 workflow 草案
+
+如果想快速看每个 domain 产出了多少 workflow：
+
+```bash
+column -s, -t < data/processed/workflow_library/workflow_library_summary.csv | less -S
+```
+
+如果想看某个 workflow 的 filter 为什么被选中，优先看：
+
+- `checkpoint_filter_stats.csv`
+
+这里会显示每个 filter 在 `S0/S1/.../Sfinal` 的 `mean/p20/p50/p80` 以及相邻 checkpoint 的变化量。
 
 如果你后面要把 workflow 自动转成自然语言指令，可以直接参考：
 

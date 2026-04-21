@@ -38,6 +38,18 @@ FILTER_STATUS_RULES: dict[str, dict[str, Any]] = {
     'words_num_filter': {'value_key': 'num_words', 'min_key': 'min_num', 'max_key': 'max_num'},
 }
 
+FILTER_CALIBRATION_RULES: dict[str, dict[str, Any]] = {
+    'alphanumeric_filter': {'direction': 'min', 'quantile': 0.20},
+    'average_line_length_filter': {'direction': 'max', 'quantile': 0.80},
+    'character_repetition_filter': {'direction': 'max', 'quantile': 0.80},
+    'flagged_words_filter': {'direction': 'max', 'quantile': 0.80},
+    'maximum_line_length_filter': {'direction': 'max', 'quantile': 0.80},
+    'stopwords_filter': {'direction': 'min', 'quantile': 0.20},
+    'text_length_filter': {'direction': 'min', 'quantile': 0.20},
+    'word_repetition_filter': {'direction': 'max', 'quantile': 0.80},
+    'words_num_filter': {'direction': 'min', 'quantile': 0.20},
+}
+
 SAFE_MAX_CHARS_FOR_EXPENSIVE_MAPPERS = 80_000
 EXPENSIVE_LONG_TEXT_MAPPERS = {
     'remove_repeat_sentences_mapper',
@@ -162,6 +174,65 @@ def _resolve_status_value_key(op_name: str, params: dict[str, Any]) -> str | Non
     return value_key(params) if callable(value_key) else value_key
 
 
+def _percentile(values: list[float], q: float) -> float | None:
+    if not values:
+        return None
+    if len(values) == 1:
+        return values[0]
+    ordered = sorted(values)
+    pos = (len(ordered) - 1) * q
+    lower = int(pos)
+    upper = min(lower + 1, len(ordered) - 1)
+    weight = pos - lower
+    return ordered[lower] * (1 - weight) + ordered[upper] * weight
+
+
+def _round_float(value: float | None) -> float | None:
+    return round(value, 6) if value is not None else None
+
+
+def _summarize_values(values: list[float]) -> dict[str, Any]:
+    return {
+        'count': len(values),
+        'mean': _round_float(mean(values)) if values else None,
+        'min': _round_float(min(values)) if values else None,
+        'p10': _round_float(_percentile(values, 0.10)),
+        'p20': _round_float(_percentile(values, 0.20)),
+        'p50': _round_float(_percentile(values, 0.50)),
+        'p80': _round_float(_percentile(values, 0.80)),
+        'p90': _round_float(_percentile(values, 0.90)),
+        'max': _round_float(max(values)) if values else None,
+    }
+
+
+def _calibrate_filter_params(op_name: str, base_params: dict[str, Any], values: list[float]) -> dict[str, Any]:
+    rule = FILTER_STATUS_RULES.get(op_name)
+    calibration = FILTER_CALIBRATION_RULES.get(op_name)
+    params = dict(base_params)
+    if not rule or not calibration or not values:
+        return params
+
+    threshold = _percentile(values, float(calibration['quantile']))
+    if threshold is None:
+        return params
+
+    if calibration['direction'] == 'min':
+        params[rule['min_key']] = _round_float(threshold)
+        params.pop(rule['max_key'], None)
+    else:
+        params[rule['max_key']] = _round_float(threshold)
+        params.pop(rule['min_key'], None)
+    return params
+
+
+def _threshold_rule_label(op_name: str) -> str:
+    calibration = FILTER_CALIBRATION_RULES.get(op_name)
+    if not calibration:
+        return 'not_calibrated'
+    pct = int(float(calibration['quantile']) * 100)
+    return f"{calibration['direction']}_p{pct}"
+
+
 def _parse_operator_set(blob: str) -> list[str]:
     return [item.strip() for item in blob.split(' | ') if item.strip()]
 
@@ -255,140 +326,221 @@ def _replay_mapper_checkpoints(
     return checkpoints
 
 
-def _summarize_filter_attachment(
-    filter_variant: dict[str, Any],
-    checkpoint: dict[str, Any],
-    evaluations: list[dict[str, Any]],
-) -> dict[str, Any]:
-    keep_count = sum(1 for item in evaluations if item['keep'])
-    drop_count = sum(1 for item in evaluations if not item['keep'])
-    total = len(evaluations)
-    keep_rate = keep_count / total if total else 0.0
-    value_key = _resolve_status_value_key(filter_variant['name'], dict(filter_variant.get('params', {})))
-    values = [
-        item['stats'].get(value_key)
-        for item in evaluations
-        if value_key is not None and isinstance(item.get('stats', {}).get(value_key), (int, float))
-    ]
-    balanced_support = min(keep_count, drop_count)
-    return {
-        'filter_name': filter_variant['name'],
-        'filter_params': dict(filter_variant.get('params', {})),
-        'checkpoint_id': checkpoint['checkpoint_id'],
-        'attach_after_step': checkpoint['step_index'],
-        'attach_after_operator': checkpoint['after_operator'],
-        'support_records': total,
-        'keep_count': keep_count,
-        'drop_count': drop_count,
-        'keep_rate': round(keep_rate, 6),
-        'drop_rate': round(1.0 - keep_rate, 6),
-        'balanced_support': balanced_support,
-        'status_value_key': value_key,
-        'status_value_mean': round(mean(values), 6) if values else None,
-        'status_value_min': round(min(values), 6) if values else None,
-        'status_value_max': round(max(values), 6) if values else None,
-        'selection_score': (
-            1 if keep_count > 0 and drop_count > 0 else 0,
-            balanced_support,
-            total,
-            checkpoint['step_index'],
-        ),
-    }
-
-
-def _select_filter_attachments(
+def _collect_checkpoint_filter_stats(
     ordered_mappers: list[dict[str, Any]],
     filter_variants: list[dict[str, Any]],
     support_records: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    raw_values: dict[tuple[str, str], list[float]] = defaultdict(list)
+    checkpoint_info: dict[str, dict[str, Any]] = {}
+    filter_info: dict[str, dict[str, Any]] = {}
+
+    for record in support_records:
+        suffix = _infer_suffix(record)
+        try:
+            checkpoints = _replay_mapper_checkpoints(record, ordered_mappers)
+        except Exception:
+            continue
+
+        for checkpoint in checkpoints:
+            checkpoint_info[checkpoint['checkpoint_id']] = {
+                'checkpoint_id': checkpoint['checkpoint_id'],
+                'step_index': checkpoint['step_index'],
+                'after_operator': checkpoint['after_operator'],
+            }
+            for filter_variant in filter_variants:
+                op_name = filter_variant['name']
+                params = dict(filter_variant.get('params', {}))
+                value_key = _resolve_status_value_key(op_name, params)
+                if value_key is None:
+                    continue
+                try:
+                    evaluation = _evaluate_filter(op_name, checkpoint['text'], params, suffix)
+                except Exception:
+                    continue
+                value = evaluation.get('stats', {}).get(value_key)
+                if isinstance(value, (int, float)):
+                    raw_values[(op_name, checkpoint['checkpoint_id'])].append(float(value))
+                    filter_info[op_name] = {
+                        'filter_name': op_name,
+                        'filter_params': params,
+                        'status_value_key': value_key,
+                    }
+
+    checkpoint_rows: list[dict[str, Any]] = []
+    attachment_candidates: list[dict[str, Any]] = []
+    previous_by_filter: dict[str, dict[str, Any]] = {}
+
+    for filter_name in sorted(filter_info):
+        checkpoints = sorted(checkpoint_info.values(), key=lambda row: row['step_index'])
+        previous_by_filter[filter_name] = {}
+        for checkpoint in checkpoints:
+            values = raw_values.get((filter_name, checkpoint['checkpoint_id']), [])
+            if not values:
+                continue
+            summary = _summarize_values(values)
+            prev = previous_by_filter[filter_name]
+            prev_mean = prev.get('mean')
+            mean_value = summary['mean']
+            delta = None
+            rel_delta = None
+            if isinstance(prev_mean, (int, float)) and isinstance(mean_value, (int, float)):
+                delta = mean_value - prev_mean
+                if abs(prev_mean) > 1e-12:
+                    rel_delta = delta / abs(prev_mean)
+
+            base_params = dict(filter_info[filter_name]['filter_params'])
+            calibrated_params = _calibrate_filter_params(filter_name, base_params, values)
+            candidate = {
+                **filter_info[filter_name],
+                **checkpoint,
+                'support_records': summary['count'],
+                'threshold_selection_rule': _threshold_rule_label(filter_name),
+                'calibrated_filter_params': calibrated_params,
+                'stat_mean': summary['mean'],
+                'stat_min': summary['min'],
+                'stat_p10': summary['p10'],
+                'stat_p20': summary['p20'],
+                'stat_p50': summary['p50'],
+                'stat_p80': summary['p80'],
+                'stat_p90': summary['p90'],
+                'stat_max': summary['max'],
+                'delta_from_prev_mean': _round_float(delta),
+                'relative_delta_from_prev_mean': _round_float(rel_delta),
+            }
+            checkpoint_rows.append(candidate)
+            attachment_candidates.append(
+                {
+                    **candidate,
+                    'selection_score': (
+                        summary['count'],
+                        abs(rel_delta or 0.0),
+                        abs(delta or 0.0),
+                        checkpoint['step_index'],
+                    ),
+                }
+            )
+            previous_by_filter[filter_name] = summary
+
+    return checkpoint_rows, attachment_candidates
+
+
+def _select_stage_attachments(
+    attachment_candidates: list[dict[str, Any]],
+    *,
+    stage: str,
+    final_step_index: int,
     min_filter_support: int,
     max_filters_per_workflow: int,
 ) -> list[dict[str, Any]]:
-    if not support_records:
-        return []
+    if stage == 'raw':
+        candidates = [row for row in attachment_candidates if row['step_index'] == 0]
+    elif stage == 'final':
+        candidates = [row for row in attachment_candidates if row['step_index'] == final_step_index]
+    elif stage == 'middle':
+        candidates = [row for row in attachment_candidates if 0 < row['step_index'] < final_step_index]
+    else:
+        candidates = list(attachment_candidates)
 
-    per_filter_best: list[dict[str, Any]] = []
-    for filter_variant in filter_variants:
-        best_summary = None
-        for checkpoint_idx in range(1, len(ordered_mappers) + 1):
-            evaluations = []
-            for record in support_records:
-                checkpoints = _replay_mapper_checkpoints(record, ordered_mappers[:checkpoint_idx])
-                checkpoint = checkpoints[-1]
-                suffix = _infer_suffix(record)
-                try:
-                    evaluation = _evaluate_filter(
-                        filter_variant['name'],
-                        checkpoint['text'],
-                        dict(filter_variant.get('params', {})),
-                        suffix,
-                    )
-                except Exception as exc:
-                    evaluation = {
-                        'keep': False,
-                        'status': 'ERROR',
-                        'stats': {},
-                        'error': f'{type(exc).__name__}: {exc}',
-                    }
-                evaluations.append(evaluation)
-
-            if len(evaluations) < min_filter_support:
-                continue
-            summary = _summarize_filter_attachment(filter_variant, checkpoint, evaluations)
-            if best_summary is None or summary['selection_score'] > best_summary['selection_score']:
-                best_summary = summary
-
-        if best_summary is not None:
-            per_filter_best.append(best_summary)
-
-    per_filter_best.sort(
+    candidates = [row for row in candidates if row['support_records'] >= min_filter_support]
+    candidates.sort(
         key=lambda row: (
             -row['selection_score'][0],
             -row['selection_score'][1],
             -row['selection_score'][2],
-            -row['attach_after_step'],
             row['filter_name'],
         )
     )
-    return per_filter_best[:max_filters_per_workflow]
+    selected: list[dict[str, Any]] = []
+    seen_filters: set[str] = set()
+    for row in candidates:
+        if row['filter_name'] in seen_filters:
+            continue
+        seen_filters.add(row['filter_name'])
+        selected.append({k: v for k, v in row.items() if k != 'selection_score'})
+        if len(selected) >= max_filters_per_workflow:
+            break
+    return selected
 
 
 def _materialize_variants(
     workflow_id: str,
     ordered_mappers: list[dict[str, Any]],
-    attachments: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
+    *,
+    raw_attachments: list[dict[str, Any]],
+    final_attachments: list[dict[str, Any]],
+    middle_attachments: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     mapper_names = [variant['name'] for variant in ordered_mappers]
-    variants = [
+    main_variants = [
         {
-            'workflow_variant_id': f'{workflow_id}__base',
-            'variant_type': 'mapper_only',
+            'workflow_variant_id': f'{workflow_id}__clean_only',
+            'workflow_type': 'clean-only',
+            'benchmark_track': 'main',
             'operator_sequence': mapper_names,
+            'filter_name': None,
+            'filter_checkpoint_id': None,
+            'filter_step_index': None,
+            'filter_params': None,
         }
     ]
-    for idx, attachment in enumerate(attachments, start=1):
-        attach_after_step = int(attachment['attach_after_step'])
-        sequence = [
-            *mapper_names[:attach_after_step],
-            attachment['filter_name'],
-            *mapper_names[attach_after_step:],
-        ]
-        variants.append(
+
+    for idx, attachment in enumerate(raw_attachments, start=1):
+        main_variants.append(
             {
-                'workflow_variant_id': f'{workflow_id}__filter_{idx:02d}',
-                'variant_type': 'single_filter_attachment',
-                'operator_sequence': sequence,
+                'workflow_variant_id': f'{workflow_id}__filter_then_clean_{idx:02d}',
+                'workflow_type': 'filter-then-clean',
+                'benchmark_track': 'main',
+                'operator_sequence': [attachment['filter_name'], *mapper_names],
                 'filter_name': attachment['filter_name'],
-                'attach_after_step': attach_after_step,
-                'attach_after_operator': attachment['attach_after_operator'],
-                'filter_params': attachment['filter_params'],
+                'filter_checkpoint_id': attachment['checkpoint_id'],
+                'filter_step_index': attachment['step_index'],
+                'filter_params': attachment['calibrated_filter_params'],
+                'threshold_selection_rule': attachment['threshold_selection_rule'],
             }
         )
-    return variants
+
+    for idx, attachment in enumerate(final_attachments, start=1):
+        main_variants.append(
+            {
+                'workflow_variant_id': f'{workflow_id}__clean_then_filter_{idx:02d}',
+                'workflow_type': 'clean-then-filter',
+                'benchmark_track': 'main',
+                'operator_sequence': [*mapper_names, attachment['filter_name']],
+                'filter_name': attachment['filter_name'],
+                'filter_checkpoint_id': attachment['checkpoint_id'],
+                'filter_step_index': attachment['step_index'],
+                'filter_params': attachment['calibrated_filter_params'],
+                'threshold_selection_rule': attachment['threshold_selection_rule'],
+            }
+        )
+
+    order_variants: list[dict[str, Any]] = []
+    for idx, attachment in enumerate(middle_attachments, start=1):
+        split_at = int(attachment['step_index'])
+        order_variants.append(
+            {
+                'workflow_variant_id': f'{workflow_id}__clean_filter_clean_s{split_at}_{idx:02d}',
+                'workflow_type': 'clean-filter-clean',
+                'benchmark_track': 'order_sensitivity',
+                'operator_sequence': [
+                    *mapper_names[:split_at],
+                    attachment['filter_name'],
+                    *mapper_names[split_at:],
+                ],
+                'filter_name': attachment['filter_name'],
+                'filter_checkpoint_id': attachment['checkpoint_id'],
+                'filter_step_index': attachment['step_index'],
+                'filter_params': attachment['calibrated_filter_params'],
+                'threshold_selection_rule': attachment['threshold_selection_rule'],
+            }
+        )
+    return main_variants, order_variants
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description='Materialize benchmark-ready workflow drafts by ordering mapper workflows and attaching supported filters.'
+        description='Materialize main and order-sensitivity workflow drafts from mined clean workflows.'
     )
     parser.add_argument('--domains-config', default='configs/domains.yaml')
     parser.add_argument('--workflow-mining-dir', default='data/processed/workflow_mining')
@@ -431,6 +583,8 @@ def main() -> None:
         ordered_filter_variants = _domain_filter_variants(domain, plan)
         domain_yaml = {'domain': domain, 'workflows': []}
         attachment_rows: list[dict[str, Any]] = []
+        checkpoint_rows: list[dict[str, Any]] = []
+        order_candidate_rows: list[dict[str, Any]] = []
         variant_rows: list[dict[str, Any]] = []
 
         for row in workflow_rows:
@@ -442,37 +596,100 @@ def main() -> None:
                 operator_set,
                 max_records=args.max_support_records,
             )
-            attachments = _select_filter_attachments(
+            filter_checkpoint_rows, attachment_candidates = _collect_checkpoint_filter_stats(
                 ordered_mappers=ordered_mappers,
                 filter_variants=ordered_filter_variants,
                 support_records=support_records,
+            )
+            final_step_index = len(ordered_mappers)
+            raw_attachments = _select_stage_attachments(
+                attachment_candidates,
+                stage='raw',
+                final_step_index=final_step_index,
                 min_filter_support=args.min_filter_support,
                 max_filters_per_workflow=args.max_filters_per_workflow,
             )
-            variants = _materialize_variants(workflow_id, ordered_mappers, attachments)
-            recommended_variant = variants[1] if len(variants) > 1 else variants[0]
+            final_attachments = _select_stage_attachments(
+                attachment_candidates,
+                stage='final',
+                final_step_index=final_step_index,
+                min_filter_support=args.min_filter_support,
+                max_filters_per_workflow=args.max_filters_per_workflow,
+            )
+            middle_attachments = _select_stage_attachments(
+                attachment_candidates,
+                stage='middle',
+                final_step_index=final_step_index,
+                min_filter_support=args.min_filter_support,
+                max_filters_per_workflow=args.max_filters_per_workflow,
+            )
+            main_variants, order_variants = _materialize_variants(
+                workflow_id,
+                ordered_mappers,
+                raw_attachments=raw_attachments,
+                final_attachments=final_attachments,
+                middle_attachments=middle_attachments,
+            )
+            all_variants = [*main_variants, *order_variants]
+            mapper_sequence = ' -> '.join(variant['name'] for variant in ordered_mappers)
 
-            for attachment in attachments:
-                attachment_rows.append(
+            for checkpoint_row in filter_checkpoint_rows:
+                checkpoint_rows.append(
                     {
                         'domain': domain,
                         'workflow_id': workflow_id,
-                        'mapper_sequence': ' -> '.join(variant['name'] for variant in ordered_mappers),
-                        **{k: v for k, v in attachment.items() if k != 'selection_score'},
+                        'mapper_sequence': mapper_sequence,
+                        **checkpoint_row,
                     }
                 )
 
-            for variant in variants:
+            selected_attachments = [
+                *[(attachment, 'filter-then-clean', 'main') for attachment in raw_attachments],
+                *[(attachment, 'clean-then-filter', 'main') for attachment in final_attachments],
+                *[(attachment, 'clean-filter-clean', 'order_sensitivity') for attachment in middle_attachments],
+            ]
+            for attachment, workflow_type, benchmark_track in selected_attachments:
+                attachment_row = {
+                    'domain': domain,
+                    'workflow_id': workflow_id,
+                    'mapper_sequence': mapper_sequence,
+                    'workflow_type': workflow_type,
+                    'benchmark_track': benchmark_track,
+                    **{k: v for k, v in attachment.items() if k != 'selection_score'},
+                }
+                if benchmark_track == 'order_sensitivity':
+                    continue
+                else:
+                    attachment_rows.append(attachment_row)
+
+            for variant in all_variants:
                 variant_rows.append(
                     {
                         'domain': domain,
                         'workflow_id': workflow_id,
                         'workflow_variant_id': variant['workflow_variant_id'],
-                        'variant_type': variant['variant_type'],
+                        'workflow_type': variant['workflow_type'],
+                        'benchmark_track': variant['benchmark_track'],
                         'operator_sequence': ' -> '.join(variant['operator_sequence']),
                         'length': len(variant['operator_sequence']),
                         'filter_name': variant.get('filter_name'),
-                        'attach_after_step': variant.get('attach_after_step'),
+                        'filter_checkpoint_id': variant.get('filter_checkpoint_id'),
+                        'filter_step_index': variant.get('filter_step_index'),
+                        'filter_params': variant.get('filter_params'),
+                    }
+                )
+
+            for attachment, variant in zip(middle_attachments, order_variants):
+                order_candidate_rows.append(
+                    {
+                        'domain': domain,
+                        'workflow_id': workflow_id,
+                        'workflow_variant_id': variant['workflow_variant_id'],
+                        'workflow_type': variant['workflow_type'],
+                        'operator_sequence': ' -> '.join(variant['operator_sequence']),
+                        'length': len(variant['operator_sequence']),
+                        'mapper_sequence': mapper_sequence,
+                        **{k: v for k, v in attachment.items() if k != 'selection_score'},
                     }
                 )
 
@@ -484,14 +701,16 @@ def main() -> None:
                     'support': int(row.get('support', 0) or 0),
                     'support_ratio': float(row.get('support_ratio', 0.0) or 0.0),
                     'mapper_operator_set': operator_set,
-                    'ordered_mapper_sequence': [variant['name'] for variant in ordered_mappers],
-                    'support_records_used_for_filter_attachment': len(support_records),
-                    'recommended_filter_attachments': [
-                        {k: v for k, v in attachment.items() if k != 'selection_score'} for attachment in attachments
-                    ],
-                    'workflow_variants': variants,
-                    'recommended_workflow_variant_id': recommended_variant['workflow_variant_id'],
-                    'recommended_operator_sequence': recommended_variant['operator_sequence'],
+                    'ordered_clean_sequence': [variant['name'] for variant in ordered_mappers],
+                    'support_records_used_for_filter_scan': len(support_records),
+                    'main_workflow_variants': main_variants,
+                    'order_sensitivity_variants': order_variants,
+                    'selected_filter_attachments': {
+                        'filter_then_clean': raw_attachments,
+                        'clean_then_filter': final_attachments,
+                        'clean_filter_clean': middle_attachments,
+                    },
+                    'checkpoint_filter_stats_file': 'checkpoint_filter_stats.csv',
                     'curation_status': 'draft_workflow_ready_for_threshold_and_prompt_curation',
                 }
             )
@@ -502,10 +721,11 @@ def main() -> None:
                     'workflow_id': workflow_id,
                     'support': int(row.get('support', 0) or 0),
                     'mapper_length': len(ordered_mappers),
-                    'num_filter_attachments': len(attachments),
-                    'num_materialized_variants': len(variants),
-                    'recommended_variant_type': recommended_variant['variant_type'],
-                    'recommended_workflow_variant_id': recommended_variant['workflow_variant_id'],
+                    'num_main_variants': len(main_variants),
+                    'num_order_sensitivity_variants': len(order_variants),
+                    'num_filter_then_clean': len(raw_attachments),
+                    'num_clean_then_filter': len(final_attachments),
+                    'num_clean_filter_clean': len(middle_attachments),
                 }
             )
 
@@ -516,6 +736,8 @@ def main() -> None:
             yaml.safe_dump(domain_yaml, f, sort_keys=False, allow_unicode=True)
         pd.DataFrame(variant_rows).to_csv(domain_out_dir / 'workflow_variants.csv', index=False)
         pd.DataFrame(attachment_rows).to_csv(domain_out_dir / 'filter_attachments.csv', index=False)
+        pd.DataFrame(checkpoint_rows).to_csv(domain_out_dir / 'checkpoint_filter_stats.csv', index=False)
+        pd.DataFrame(order_candidate_rows).to_csv(domain_out_dir / 'order_sensitivity_candidates.csv', index=False)
 
     with (output_dir / 'workflow_library.yaml').open('w', encoding='utf-8') as f:
         yaml.safe_dump(global_yaml, f, sort_keys=False, allow_unicode=True)
