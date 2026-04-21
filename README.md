@@ -219,6 +219,7 @@ sed -n '1,160p' data/processed/workflow_mining/web/workflow_candidates.yaml
 - `data/processed/workflow_library/<domain>/workflow_variants.csv`
 - `data/processed/workflow_library/<domain>/filter_attachments.csv`
 - `data/processed/workflow_library/<domain>/checkpoint_filter_stats.csv`
+- `data/processed/workflow_library/<domain>/order_sensitivity_families.csv`
 - `data/processed/workflow_library/<domain>/order_sensitivity_candidates.csv`
 - `data/processed/workflow_library/workflow_library_summary.csv`
 
@@ -228,6 +229,7 @@ sed -n '1,160p' data/processed/workflow_mining/web/workflow_candidates.yaml
   里面会同时给出：
   - `ordered_clean_sequence`
   - `main_workflow_variants`
+  - `order_sensitivity_families`
   - `order_sensitivity_variants`
   - `selected_filter_attachments`
 
@@ -239,8 +241,17 @@ sed -n '1,160p' data/processed/workflow_mining/web/workflow_candidates.yaml
 
 顺序敏感拓展实验单独放在：
 
-- `clean-filter-clean`
+- `order_sensitivity_families.csv`
 - `order_sensitivity_candidates.csv`
+
+这里不是把中间插入的 workflow 混进主榜，而是单独构造成组的次榜：
+
+- 同一个 `workflow_id + filter_name` 形成一个 `order_family`
+- 每个 `order_family` 必须同时包含 `front / middle / end` 三个 slot
+- `front` 对应 `filter-then-clean`
+- `middle` 对应 `clean-filter-clean`
+- `end` 对应 `clean-then-filter`
+- 组级 metric 要求三个 slot 都做对，才算这个 `order_family` 成功
 
 可以把这一步理解成：
 

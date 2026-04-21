@@ -463,14 +463,114 @@ def _select_stage_attachments(
     return selected
 
 
+def _select_order_sensitivity_families(
+    workflow_id: str,
+    attachment_candidates: list[dict[str, Any]],
+    *,
+    final_step_index: int,
+    min_filter_support: int,
+    max_families_per_workflow: int,
+) -> list[dict[str, Any]]:
+    eligible = [row for row in attachment_candidates if row['support_records'] >= min_filter_support]
+    by_filter: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
+    for row in eligible:
+        step_index = int(row['step_index'])
+        if step_index == 0:
+            slot = 'front'
+        elif step_index == final_step_index:
+            slot = 'end'
+        elif 0 < step_index < final_step_index:
+            slot = 'middle'
+        else:
+            continue
+        by_filter[row['filter_name']][slot].append(row)
+
+    families: list[dict[str, Any]] = []
+    for filter_name, slots in by_filter.items():
+        if not {'front', 'middle', 'end'} <= set(slots):
+            continue
+
+        front = _best_attachment(slots['front'])
+        middle = _best_attachment(slots['middle'])
+        end = _best_attachment(slots['end'])
+        min_support = min(front['support_records'], middle['support_records'], end['support_records'])
+        sensitivity_score = max(
+            abs(middle.get('relative_delta_from_prev_mean') or 0.0),
+            abs(end.get('relative_delta_from_prev_mean') or 0.0),
+            abs(middle.get('delta_from_prev_mean') or 0.0),
+            abs(end.get('delta_from_prev_mean') or 0.0),
+        )
+        family = {
+            'order_family_id': f'{workflow_id}__order_family__{filter_name}',
+            'filter_name': filter_name,
+            'front': {k: v for k, v in front.items() if k != 'selection_score'},
+            'middle': {k: v for k, v in middle.items() if k != 'selection_score'},
+            'end': {k: v for k, v in end.items() if k != 'selection_score'},
+            'min_support_records': min_support,
+            'selection_score': (min_support, sensitivity_score, filter_name),
+        }
+        families.append(family)
+
+    families.sort(key=lambda row: (-row['selection_score'][0], -row['selection_score'][1], row['filter_name']))
+    return [{k: v for k, v in row.items() if k != 'selection_score'} for row in families[:max_families_per_workflow]]
+
+
+def _best_attachment(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    return sorted(
+        rows,
+        key=lambda row: (
+            -row['selection_score'][0],
+            -row['selection_score'][1],
+            -row['selection_score'][2],
+            row['step_index'],
+            row['filter_name'],
+        ),
+    )[0]
+
+
+def _order_variant(
+    workflow_id: str,
+    order_family_id: str,
+    mapper_names: list[str],
+    slot: str,
+    attachment: dict[str, Any],
+) -> dict[str, Any]:
+    if slot == 'front':
+        workflow_type = 'filter-then-clean'
+        operator_sequence = [attachment['filter_name'], *mapper_names]
+    elif slot == 'end':
+        workflow_type = 'clean-then-filter'
+        operator_sequence = [*mapper_names, attachment['filter_name']]
+    elif slot == 'middle':
+        workflow_type = 'clean-filter-clean'
+        split_at = int(attachment['step_index'])
+        operator_sequence = [*mapper_names[:split_at], attachment['filter_name'], *mapper_names[split_at:]]
+    else:
+        raise ValueError(f'unknown order-sensitivity slot: {slot}')
+
+    return {
+        'workflow_variant_id': f'{order_family_id}__{slot}',
+        'order_family_id': order_family_id,
+        'order_slot': slot,
+        'workflow_type': workflow_type,
+        'benchmark_track': 'order_sensitivity',
+        'operator_sequence': operator_sequence,
+        'filter_name': attachment['filter_name'],
+        'filter_checkpoint_id': attachment['checkpoint_id'],
+        'filter_step_index': attachment['step_index'],
+        'filter_params': attachment['calibrated_filter_params'],
+        'threshold_selection_rule': attachment['threshold_selection_rule'],
+    }
+
+
 def _materialize_variants(
     workflow_id: str,
     ordered_mappers: list[dict[str, Any]],
     *,
     raw_attachments: list[dict[str, Any]],
     final_attachments: list[dict[str, Any]],
-    middle_attachments: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    order_families: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     mapper_names = [variant['name'] for variant in ordered_mappers]
     main_variants = [
         {
@@ -516,26 +616,25 @@ def _materialize_variants(
         )
 
     order_variants: list[dict[str, Any]] = []
-    for idx, attachment in enumerate(middle_attachments, start=1):
-        split_at = int(attachment['step_index'])
-        order_variants.append(
+    materialized_order_families: list[dict[str, Any]] = []
+    for family in order_families:
+        family_variants = [
+            _order_variant(workflow_id, family['order_family_id'], mapper_names, 'front', family['front']),
+            _order_variant(workflow_id, family['order_family_id'], mapper_names, 'middle', family['middle']),
+            _order_variant(workflow_id, family['order_family_id'], mapper_names, 'end', family['end']),
+        ]
+        order_variants.extend(family_variants)
+        materialized_order_families.append(
             {
-                'workflow_variant_id': f'{workflow_id}__clean_filter_clean_s{split_at}_{idx:02d}',
-                'workflow_type': 'clean-filter-clean',
-                'benchmark_track': 'order_sensitivity',
-                'operator_sequence': [
-                    *mapper_names[:split_at],
-                    attachment['filter_name'],
-                    *mapper_names[split_at:],
-                ],
-                'filter_name': attachment['filter_name'],
-                'filter_checkpoint_id': attachment['checkpoint_id'],
-                'filter_step_index': attachment['step_index'],
-                'filter_params': attachment['calibrated_filter_params'],
-                'threshold_selection_rule': attachment['threshold_selection_rule'],
+                'order_family_id': family['order_family_id'],
+                'filter_name': family['filter_name'],
+                'min_support_records': family['min_support_records'],
+                'required_slots_for_group_success': ['front', 'middle', 'end'],
+                'group_success_rule': 'all_slots_correct',
+                'variants': family_variants,
             }
         )
-    return main_variants, order_variants
+    return main_variants, order_variants, materialized_order_families
 
 
 def main() -> None:
@@ -585,6 +684,7 @@ def main() -> None:
         attachment_rows: list[dict[str, Any]] = []
         checkpoint_rows: list[dict[str, Any]] = []
         order_candidate_rows: list[dict[str, Any]] = []
+        order_family_rows: list[dict[str, Any]] = []
         variant_rows: list[dict[str, Any]] = []
 
         for row in workflow_rows:
@@ -616,19 +716,19 @@ def main() -> None:
                 min_filter_support=args.min_filter_support,
                 max_filters_per_workflow=args.max_filters_per_workflow,
             )
-            middle_attachments = _select_stage_attachments(
+            order_families = _select_order_sensitivity_families(
+                workflow_id,
                 attachment_candidates,
-                stage='middle',
                 final_step_index=final_step_index,
                 min_filter_support=args.min_filter_support,
-                max_filters_per_workflow=args.max_filters_per_workflow,
+                max_families_per_workflow=args.max_filters_per_workflow,
             )
-            main_variants, order_variants = _materialize_variants(
+            main_variants, order_variants, materialized_order_families = _materialize_variants(
                 workflow_id,
                 ordered_mappers,
                 raw_attachments=raw_attachments,
                 final_attachments=final_attachments,
-                middle_attachments=middle_attachments,
+                order_families=order_families,
             )
             all_variants = [*main_variants, *order_variants]
             mapper_sequence = ' -> '.join(variant['name'] for variant in ordered_mappers)
@@ -646,7 +746,6 @@ def main() -> None:
             selected_attachments = [
                 *[(attachment, 'filter-then-clean', 'main') for attachment in raw_attachments],
                 *[(attachment, 'clean-then-filter', 'main') for attachment in final_attachments],
-                *[(attachment, 'clean-filter-clean', 'order_sensitivity') for attachment in middle_attachments],
             ]
             for attachment, workflow_type, benchmark_track in selected_attachments:
                 attachment_row = {
@@ -670,6 +769,8 @@ def main() -> None:
                         'workflow_variant_id': variant['workflow_variant_id'],
                         'workflow_type': variant['workflow_type'],
                         'benchmark_track': variant['benchmark_track'],
+                        'order_family_id': variant.get('order_family_id'),
+                        'order_slot': variant.get('order_slot'),
                         'operator_sequence': ' -> '.join(variant['operator_sequence']),
                         'length': len(variant['operator_sequence']),
                         'filter_name': variant.get('filter_name'),
@@ -679,19 +780,41 @@ def main() -> None:
                     }
                 )
 
-            for attachment, variant in zip(middle_attachments, order_variants):
-                order_candidate_rows.append(
+            for family in materialized_order_families:
+                variants_by_slot = {variant['order_slot']: variant for variant in family['variants']}
+                order_family_rows.append(
                     {
                         'domain': domain,
                         'workflow_id': workflow_id,
-                        'workflow_variant_id': variant['workflow_variant_id'],
-                        'workflow_type': variant['workflow_type'],
-                        'operator_sequence': ' -> '.join(variant['operator_sequence']),
-                        'length': len(variant['operator_sequence']),
-                        'mapper_sequence': mapper_sequence,
-                        **{k: v for k, v in attachment.items() if k != 'selection_score'},
+                        'order_family_id': family['order_family_id'],
+                        'filter_name': family['filter_name'],
+                        'min_support_records': family['min_support_records'],
+                        'required_slots_for_group_success': 'front | middle | end',
+                        'group_success_rule': family['group_success_rule'],
+                        'front_variant_id': variants_by_slot['front']['workflow_variant_id'],
+                        'middle_variant_id': variants_by_slot['middle']['workflow_variant_id'],
+                        'end_variant_id': variants_by_slot['end']['workflow_variant_id'],
                     }
                 )
+                for variant in family['variants']:
+                    order_candidate_rows.append(
+                        {
+                            'domain': domain,
+                            'workflow_id': workflow_id,
+                            'order_family_id': family['order_family_id'],
+                            'workflow_variant_id': variant['workflow_variant_id'],
+                            'order_slot': variant['order_slot'],
+                            'workflow_type': variant['workflow_type'],
+                            'operator_sequence': ' -> '.join(variant['operator_sequence']),
+                            'length': len(variant['operator_sequence']),
+                            'mapper_sequence': mapper_sequence,
+                            'filter_name': variant['filter_name'],
+                            'filter_checkpoint_id': variant['filter_checkpoint_id'],
+                            'filter_step_index': variant['filter_step_index'],
+                            'filter_params': variant['filter_params'],
+                            'threshold_selection_rule': variant['threshold_selection_rule'],
+                        }
+                    )
 
             domain_yaml['workflows'].append(
                 {
@@ -705,10 +828,10 @@ def main() -> None:
                     'support_records_used_for_filter_scan': len(support_records),
                     'main_workflow_variants': main_variants,
                     'order_sensitivity_variants': order_variants,
+                    'order_sensitivity_families': materialized_order_families,
                     'selected_filter_attachments': {
                         'filter_then_clean': raw_attachments,
                         'clean_then_filter': final_attachments,
-                        'clean_filter_clean': middle_attachments,
                     },
                     'checkpoint_filter_stats_file': 'checkpoint_filter_stats.csv',
                     'curation_status': 'draft_workflow_ready_for_threshold_and_prompt_curation',
@@ -723,9 +846,9 @@ def main() -> None:
                     'mapper_length': len(ordered_mappers),
                     'num_main_variants': len(main_variants),
                     'num_order_sensitivity_variants': len(order_variants),
+                    'num_order_sensitivity_families': len(materialized_order_families),
                     'num_filter_then_clean': len(raw_attachments),
                     'num_clean_then_filter': len(final_attachments),
-                    'num_clean_filter_clean': len(middle_attachments),
                 }
             )
 
@@ -738,6 +861,7 @@ def main() -> None:
         pd.DataFrame(attachment_rows).to_csv(domain_out_dir / 'filter_attachments.csv', index=False)
         pd.DataFrame(checkpoint_rows).to_csv(domain_out_dir / 'checkpoint_filter_stats.csv', index=False)
         pd.DataFrame(order_candidate_rows).to_csv(domain_out_dir / 'order_sensitivity_candidates.csv', index=False)
+        pd.DataFrame(order_family_rows).to_csv(domain_out_dir / 'order_sensitivity_families.csv', index=False)
 
     with (output_dir / 'workflow_library.yaml').open('w', encoding='utf-8') as f:
         yaml.safe_dump(global_yaml, f, sort_keys=False, allow_unicode=True)

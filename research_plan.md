@@ -270,13 +270,20 @@ ICDR-Bench v1 主榜优先采用 **closed-form、边界唯一、易 canonicalize
 2. **顺序敏感性扩展切片**
 
    - 固定或近似固定 operator set，只改变顺序或 filter 插入位置
-   - 只保留 deterministic reference 明显不同的 order variants
+   - 打标/构造时允许在每个 mapper checkpoint 扫描 filter status
+   - 进入主榜时不使用中间插入的 filter，只保留 `filter-then-clean` 和 `clean-then-filter`
+   - 只有同一个 `workflow + filter` 同时能形成 `front / middle / end` 三个位置时，才进入次榜 order family
+   - 只保留 deterministic reference 明显不同的 order families
    - 用于单独评测模型是否真正跟随顺序，不进入主榜总分
 
 这里建议把一个顺序敏感测试单元定义为一个 `order family`：
 
-- 共享同一组或近似同组 operators
-- 包含多个合理的 order variants
+- 共享同一个 clean workflow skeleton
+- 共享同一个 filter
+- 包含 `front / middle / end` 三个 order variants
+- `front = filter-then-clean`
+- `middle = clean-filter-clean`
+- `end = clean-then-filter`
 - 只有当不同顺序下的 deterministic reference 确实不同，才保留该 family
 
 在这个定义下，主 metric 可以分成两层：
@@ -288,7 +295,7 @@ ICDR-Bench v1 主榜优先采用 **closed-form、边界唯一、易 canonicalize
 2. `Order-Consistent Success`
 
    - 以 `order family` 为单位计分
-   - 只有该 family 下所有要求评测的顺序变体都做对，才算成功
+   - 只有该 family 下 `front / middle / end` 三个顺序变体都做对，才算成功
    - 回答“模型是否真正理解顺序，而不是碰巧在某一个顺序上做对”
 
 另外建议补两个诊断量：
@@ -439,10 +446,10 @@ Code 模式的约束应尽量严格：
 2. **顺序敏感扩展集：Order Sensitivity**
 
    - 从主实验 workflow family 中挑出或 top-down 补出顺序敏感 case；
-   - 对同一组或近似同组 operators 构造多个 order variants；
-   - 重点比较 `filter-then-clean`、`clean-filter-clean`、`clean-then-filter` 等插入位置；
+   - 对同一个 clean workflow skeleton 和同一个 filter 构造 `front / middle / end` 三个 order variants；
+   - 重点比较 `filter-then-clean`、`clean-filter-clean`、`clean-then-filter` 三个插入位置；
    - 只保留 order 改变后 deterministic reference 确实变化的样本；
-   - 可以把“该组多个顺序都做对”作为更严格的组级成功标准。
+   - 组级成功要求三个顺序都做对。
 
 ### 8.2 Bottom-up 阶段的具体操作
 
