@@ -49,6 +49,7 @@ FILTER_CALIBRATION_RULES: dict[str, dict[str, Any]] = {
     'word_repetition_filter': {'direction': 'max', 'quantile': 0.80},
     'words_num_filter': {'direction': 'min', 'quantile': 0.20},
 }
+INTEGER_THRESHOLD_KEYS = {'min_len', 'max_len', 'min_num', 'max_num'}
 
 SAFE_MAX_CHARS_FOR_EXPENSIVE_MAPPERS = 80_000
 EXPENSIVE_LONG_TEXT_MAPPERS = {
@@ -203,6 +204,14 @@ def _round_float(value: float | None) -> float | None:
     return round(value, 6) if value is not None else None
 
 
+def _format_threshold_value(value: float | None, param_key: str) -> int | float | None:
+    if value is None:
+        return None
+    if param_key in INTEGER_THRESHOLD_KEYS:
+        return int(round(value))
+    return _round_float(value)
+
+
 def _summarize_values(values: list[float]) -> dict[str, Any]:
     return {
         'count': len(values),
@@ -229,10 +238,10 @@ def _calibrate_filter_params(op_name: str, base_params: dict[str, Any], values: 
         return params
 
     if calibration['direction'] == 'min':
-        params[rule['min_key']] = _round_float(threshold)
+        params[rule['min_key']] = _format_threshold_value(threshold, rule['min_key'])
         params.pop(rule['max_key'], None)
     else:
-        params[rule['max_key']] = _round_float(threshold)
+        params[rule['max_key']] = _format_threshold_value(threshold, rule['max_key'])
         params.pop(rule['min_key'], None)
     return params
 

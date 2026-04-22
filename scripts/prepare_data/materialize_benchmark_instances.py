@@ -24,6 +24,7 @@ from icdrbench.domain_assignment import build_domain_execution_plan
 from scripts.prepare_data.materialize_domain_workflows import (
     FILTER_CALIBRATION_RULES,
     FILTER_STATUS_RULES,
+    _format_threshold_value,
     _apply_mapper_text,
     _evaluate_filter,
     _infer_suffix,
@@ -196,13 +197,13 @@ def _calibrate_filter_params_for_target(
         q = target_drop_rate
         threshold = _percentile(values, q)
         if threshold is not None:
-            params[rule['min_key']] = _round_float(threshold)
+            params[rule['min_key']] = _format_threshold_value(threshold, rule['min_key'])
             params.pop(rule['max_key'], None)
     else:
         q = 1.0 - target_drop_rate
         threshold = _percentile(values, q)
         if threshold is not None:
-            params[rule['max_key']] = _round_float(threshold)
+            params[rule['max_key']] = _format_threshold_value(threshold, rule['max_key'])
             params.pop(rule['min_key'], None)
 
     return params, {
