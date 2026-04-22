@@ -25,7 +25,7 @@ Optional:
 
 Environment:
   HF_TOKEN          Optional. Required for private HF datasets.
-  ICDRBENCH_DATA_JUICER_ROOT / DATA_JUICER_ROOT
+  CDRBENCH_DATA_JUICER_ROOT / ICDRBENCH_DATA_JUICER_ROOT / DATA_JUICER_ROOT
                     Optional. Path to a Data-Juicer repo checkout. Needed for --run-probe
                     when Data-Juicer is not located at ./data-juicer
 EOF

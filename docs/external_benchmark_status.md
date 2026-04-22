@@ -1,6 +1,6 @@
 # External Benchmark Data Status
 
-This note tracks which external benchmark assets have already been brought into the ICDR-Bench workspace, and which ones were inspected but not yet integrated.
+This note tracks which external benchmark assets have already been brought into the CDR-Bench workspace, and which ones were inspected but not yet integrated.
 
 ## Integrated Now
 
@@ -47,11 +47,11 @@ Confirmed from the paper (`arXiv:2512.04416`):
   - Data Integration
   - Classification & Labeling
 
-Why this matters for ICDR-Bench:
+Why this matters for CDR-Bench:
 - This is a valuable related source of task design ideas
 - But the underlying data shape is still table-centric / structured-data-centric rather than text-first
 - So it does not drop directly into the current Data-Juicer text-operator pipeline in its current form
-- In method comparison terms, it is closer to AutoDCWorkflow-style structured-data governance than to ICDR-Bench's text curation setting
+- In method comparison terms, it is closer to AutoDCWorkflow-style structured-data governance than to CDR-Bench's text-first compositional data-refinement setting
 
 Current blocker:
 - I did not find a public benchmark repo or dataset release containing the 150 tasks themselves
@@ -66,11 +66,11 @@ Conclusion:
 
 Why not integrated:
 - Its public task framing is structured-table workflow generation for OpenRefine
-- That does not match the current ICDR-Bench text-first Data-Juicer operator pipeline
+- That does not match the current CDR-Bench text-first Data-Juicer operator pipeline
 
 Conclusion:
 - Useful as a related benchmark in the paper
-- Not currently a compatible raw corpus source for ICDR-Bench
+- Not currently a compatible raw corpus source for CDR-Bench
 
 ## Explicitly Dropped
 

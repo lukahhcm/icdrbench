@@ -20,7 +20,7 @@ shared_operators:
 
 domains:
   web:
-    description: Web Text Cleanup
+    description: Web crawl compositional data refinement
     specific_operators:
       - name: clean_copyright_mapper
         kind: mapper
@@ -45,7 +45,7 @@ domains:
         kind: mapper
 
   arxiv:
-    description: Scientific TeX Cleanup
+    description: Scientific source compositional data refinement
     specific_operators:
       - name: clean_copyright_mapper
         kind: mapper
@@ -68,7 +68,7 @@ domains:
         kind: mapper
 
   knowledge_base:
-    description: Knowledge Base Cleanup
+    description: Knowledge-base and support-corpus refinement
     specific_operators:
       - name: fix_unicode_mapper
         kind: mapper
@@ -78,7 +78,7 @@ domains:
         kind: mapper
 
   pii:
-    description: PII Sanitization
+    description: PII sanitization and redaction
     specific_operators:
       - name: clean_email_mapper
         kind: mapper
@@ -106,7 +106,7 @@ domains:
         kind: mapper
 
   image_safety:
-    description: Image Safety Check
+    description: Image-safety compatibility placeholder; skipped in text-first CDR-Bench v1
     specific_operators:
       - name: image_nsfw_filter
         kind: filter

@@ -1,647 +1,304 @@
-# ICDR-Bench Research Plan v2
+# CDR-Bench Research Plan
 
-## 1. 核心问题
+## 1. Title and Scope
 
-ICDR-Bench 希望回答的问题是：
+**CDR-Bench: Benchmarking LLMs for Compositional Data Refinement**
 
-**当用户用自然语言完整描述一个数据治理流程时，foundation models 能否在不给工具、不给显式算子名的前提下，直接把原始非结构化数据处理成正确的最终结果？**
+CDR-Bench evaluates whether LLMs can directly execute realistic, multi-step data-refinement requests over raw text and document-source data.
 
-这里的“最终结果”统一表示为：
+The core task is not workflow generation, tool calling, code generation, or user-simulator interaction. A model receives a raw sample and a complete user-facing refinement request, then outputs the final deterministic result:
 
-- `status`: `KEEP` 或 `DROP`
-- `clean_text`: 若 `KEEP`，则为处理后的最终文本；若 `DROP`，则为空
+```json
+{"status": "KEEP", "clean_text": "..."}
+```
 
-ICDR-Bench 的主任务不是 workflow generation（可以考虑让其显示输出workflow作为验证），也不是 tool-calling / operator selection（并非调用工具），而是 **natural-language-to-execution**。
+or:
 
----
+```json
+{"status": "DROP", "clean_text": ""}
+```
 
-## 2. 为什么这个问题值得单独做 benchmark
+The hidden reference is produced by deterministic Data-Juicer-backed operators. Final prompts should describe the user need in natural language rather than exposing operator names.
 
-数据治理是 foundation-model pipeline 的前置环节，典型场景包括：
+## 2. Core Research Question
 
-- 公开网页语料清洗与过滤
-- 企业知识库 / 帮助中心 / FAQ 语料准备
-- 政策、财报、合规类长文档清洗
-- 学术源码清理与规范化
+Given a raw unstructured data sample and a natural-language compositional refinement request, can an LLM produce the same final keep/drop decision and refined text as a deterministic reference pipeline?
 
-真实使用中，用户越来越可能直接描述目标，而不是手写规则或 pipeline，例如：
+This question matters because realistic data curation is rarely a single rewrite. It often combines cleaning, normalization, redaction, extraction, and filtering, and the final answer depends on both the operations and their order.
 
-- “把页面里的 HTML、链接和联系方式去掉，统一空白，再判断是否值得保留。”
-- “把帮助文档里的链接、版权头、模板残留和重复句去掉，再判断是否值得入库。”
-- “把报告里的免责声明、表格残留和异常长行清掉，再判断是否适合进入检索库。”
-- “去掉 LaTeX 注释和 bibliography，展开宏并规范化，再判断这篇 source 是否值得保留。”
+## 3. Motivation
 
-这些任务有三个关键特征：
+Data refinement is a routine step before pretraining, RAG ingestion, search indexing, policy/report analysis, and scientific corpus construction.
 
-1. **多步组合**：通常由多个 clean/filter 步骤组成；
-2. **组合结构差异**：既包括纯改写，也包括先筛选再改写、先改写再筛选；
-3. **步骤激活要求**：workflow 中的关键步骤必须真的改变最终结果，而不是可有可无的 no-op。
+Representative user-facing requests:
 
-ICDR-Bench 的目标是把这类能力从“demo”变成一个可以系统比较、可复现、可分析的 benchmark。
+- "Remove HTML, links, and contact information from the page, normalize whitespace, then decide whether the cleaned page is worth keeping."
+- "Clean links, copyright headers, template residue, and repeated sentences from help documents before adding them to the support corpus."
+- "Remove disclaimers, table residue, and abnormal long lines from reports, then decide whether the document is suitable for retrieval."
+- "Remove LaTeX comments and bibliography, expand macros, normalize the source, then decide whether the source should be kept."
 
----
+The benchmark should therefore measure compositional execution rather than isolated text editing or isolated binary filtering.
 
-## 3. ICDR-Bench 的主任务定义
+## 4. Domains
 
-### 3.1 输入
+CDR-Bench v1 is text-first and organized by application scenario.
 
-每个样本包含：
+Current domains:
 
-- 一个原始非结构化样本 `x`
-- 一条完整自然语言 workflow specification `w`
+- `web`: web crawl cleanup and filtering
+- `arxiv`: scientific TeX/source cleanup and canonicalization
+- `knowledge_base`: support and knowledge-base corpus preparation
+- `pii`: PII sanitization and redaction
 
-`w` 描述模型需要执行的整个处理流程，但不直接暴露 Data-Juicer 的算子名。
+The `image_safety` config remains as a compatibility placeholder for future extensions and is skipped in the text-first benchmark.
 
-### 3.2 输出
+Each active domain defines:
 
-模型需要直接输出：
+- a realistic data pool
+- domain-relevant deterministic clean/filter operators
+- mined clean-operation combinations
+- materialized main-track variants
+- optional order-sensitivity families
 
-- `DROP`
-- 或 `KEEP + clean_text`
+## 5. Benchmark Tracks
 
-### 3.3 隐藏 reference
+### 5.1 Main Track
 
-每个样本对应一条隐藏的 deterministic Data-Juicer recipe `r`。
-benchmark 使用 `r` 执行得到 reference `status + clean_text`。
+The main track evaluates direct execution of compositional data refinement.
 
-### 3.4 主指标
+Workflow types:
 
-主指标为 **Workflow Success**：
+- `clean-only`: clean, normalize, redact, or extract without filtering
+- `filter-then-clean`: decide on the raw input first, then clean kept samples
+- `clean-then-filter`: clean first, then decide whether to keep the final text
 
-- 若 reference 为 `DROP`，模型必须正确输出 `DROP`；
-- 若 reference 为 `KEEP`，模型必须输出与 reference 一致的最终 `clean_text`；
-- filter 错误是一票否决。
+Main-track sampling rules:
 
----
+- clean-only instances require the reference text to differ from the input
+- filter variants recalibrate thresholds to target balanced `KEEP` / `DROP`
+- default target drop rate is `0.5`
+- fallback workflows are excluded from benchmark materialization
 
-## 4. ICDR-Bench Position
+### 5.2 Order-Sensitivity Track
 
-为了避免与现有工作混淆，ICDR-Bench 的定位需要明确为：
+The order-sensitivity track is a grouped diagnostic track, not part of the main score.
 
-**a benchmark for direct execution of natural-language data curation workflows on unstructured corpora, with deterministic operator-backed clean-text verification.**
+Each order family shares:
 
-ICDR-Bench 主榜评测的是：
+- the same raw input
+- the same clean skeleton
+- the same filter
+- the same calibrated threshold
 
-- 给定完整自然语言 workflow
-- 直接执行
-- 输出 `KEEP + clean_text` / `DROP`
-- 通过 deterministic reference 做 clean-text 级验证
+Each family contains three slots:
 
-ICDR-Bench **不**评：
+- `front`: `filter-then-clean`
+- `middle`: `clean-filter-clean`
+- `end`: `clean-then-filter`
 
-- workflow generation
-- transformation code generation 作为主任务
-- issue discovery
-- document parsing / OCR understanding
-- SQL / BI / analytics agent
+A group is kept only if at least two slots produce different references. Group-level success requires all three slots to be correct, which tests whether a model can follow the requested order rather than collapse to a generic cleaning strategy.
 
-### 4.1 与最相关 benchmark 的区别
+### 5.3 Atomic Operator Calibration
 
-`✓` = 明确具备；`△` = 部分具备 / 不是主线；`✗` = 不具备
+The atomic set estimates single-operator difficulty.
 
-| Benchmark                | 面向数据治理/处理 | 非结构化文本/文档 | 给定完整自然语言 workflow | 主任务是直接执行 | 程序化可验证 | 主榜输出 `status + clean_text` |
-| ------------------------ | ----------------- | ----------------- | ------------------------- | ---------------- | ------------ | -------------------------------- |
-| **ICDR-Bench (ours)** | ✓                | ✓                | ✓                        | ✓               | ✓           | ✓                               |
-| **AutoDCWorkflow** | ✓                | ✗                | ✗                        | ✗               | ✓           | ✗                               |
-| **DCA-Bench**      | ✓                | ✗                | ✗                        | ✗               | ✗           | ✗                               |
-| **DataGovBench**   | ✓                | ✗                | ✗                        | ✗               | △           | ✗                               |
-| **OmniDocBench**   | ✗                | ✓                | ✗                        | ✗               | ✓           | ✗                               |
+Atomic tasks are keyed by global operator, not by domain/operator pair. Instances keep `source_domain` only for diagnostics.
 
-### 4.2 具体边界
+Use cases:
 
-- **相比 AutoDCWorkflow**：ICDR-Bench 不做 workflow auto-generation，而做 fully-specified natural-language workflow 的直接执行；对象是非结构化文本/文档，而不是表格 cleaning。
-- **相比 DCA-Bench**：ICDR-Bench 不做 dataset issue discovery，而做 issue fixing / transformation / filtering 的端到端执行。
-- **相比 DataGovBench**：ICDR-Bench 不以 agentic code generation / debugging 为主，而是关注“不给工具时模型能否直接把流程做对”。
-- **相比 OmniDocBench**：ICDR-Bench 不评解析和版面理解，而评解析之后或 parsing 之外的 document/text curation workflow execution。
+- estimate `atomic_failure_rate(operator)`
+- calibrate workflow difficulty
+- compute atomic-to-compositional gaps
+- verify whether main-track failures exceed isolated operator failures
 
-### 4.3 与通用 instruction-following benchmark 的关系
+## 6. Construction Pipeline
 
-IFEval、FollowBench、SIFo 等工作评测的是通用约束遵循或序列指令跟随，它们是邻近相关工作，但不是 ICDR-Bench 的直接主对比对象。ICDR-Bench 的独特点在于：
+### 6.1 Data Download
 
-- 真实数据治理流程
-- deterministic curation operators
-- clean-text reference execution
-- clean / sanitize / normalize / filter 一体化 end-state 评测
+Download curated raw JSONL files into `data/raw/` from the Hugging Face raw-data repository.
 
----
+### 6.2 Data-Juicer Tagging
 
-## 5. 范围与非目标
+Run each candidate operator through the repo-local Data-Juicer checkout and record whether each operator is active on each sample.
 
-### 5.1 v1 范围
+Outputs:
 
-ICDR-Bench v1 只做 **text-first** benchmark，覆盖：
+- `data/processed/domain_tags/*.jsonl`
+- `data/processed/domain_filtered/*.jsonl`
+- `data/processed/domain_filtered/all.jsonl`
+- `data/processed/domain_operator_catalog.csv`
 
-1. Web Crawl Cleanup & Filtering
-2. Knowledge Base / Support Corpus Preparation
-3. Report / Policy / Compliance Document Cleanup
-4. Scientific Source Cleanup & Canonicalization
+### 6.3 Bottom-Up Workflow Mining
 
-### 5.2 不纳入 v1 主榜的内容
+Mine frequent active mapper/operator combinations per domain.
 
-- 多模态图像/图文治理
-- tool-calling
-- workflow generation
-- code generation 作为主任务
-- 纯 document parsing / OCR benchmark
+Rules:
 
-这样做的原因不是这些方向不重要，而是 ICDR-Bench v1 的 novelty 更稳地来自“任务定义和评测协议”，而不是模态数量。
+- a concrete workflow candidate needs at least 5 supporting samples by default
+- selected workflows are data-supported candidates
+- fallback coverage candidates are recorded for inspection but excluded from `selected_workflows.csv`
 
----
+Outputs:
 
-## 6. Benchmark 核心设计
+- `data/processed/workflow_mining/<domain>/selected_workflows.csv`
+- `data/processed/workflow_mining/<domain>/workflow_families.csv`
+- `data/processed/workflow_mining/<domain>/workflow_candidates.yaml`
 
-### 6.1 Domain 组织方式
+### 6.4 Workflow Library Materialization
 
-benchmark 按真实数据治理场景组织，而不是按单个算子组织。每个 domain 都包含：
+Convert mined mapper sets into ordered clean sequences and attach candidate filters.
 
-- 一个相对统一的数据来源分布
-- 一组相关 deterministic operators
-- 若干 workflow families
-- easy / medium / hard 难度层
+The materializer scans filter statistics at every checkpoint:
 
-ICDR-Bench v1 中，domain 的边界优先由 **应用场景 + 数据基底 + domain-native operators** 决定，而不是由单个共享 text cleanup 算子决定。更具体地说：
+- `S0`: raw input
+- `S1...Sfinal`: after each clean step
 
-- `CleanHtmlMapper` 及其后续清洗链定义 web crawl domain；
-- `CleanLinks`、`CleanEmail`、`CleanIp`、`CleanCopyright`、`RemoveTableText` 等共享 text cleanup ops 可以作为 KB/support 与 report/policy/compliance 两个 domain 的 backbone，但两者仍由数据来源和真实 pipeline 明确区分；
-- `LatexMergeTexMapper`、`ExpandMacroMapper`、`RemoveCommentsMapper`、`RemoveBibliographyMapper`、`RemoveHeaderMapper` 定义 scientific source domain。
+For the main track, only `clean-only`, `filter-then-clean`, and `clean-then-filter` variants are kept. Middle insertion is used only for the order-sensitivity track.
 
-也就是说，ICDR-Bench v1 不追求“每个 domain 都有完全独占的算子”，而是追求：
+Outputs:
 
-- 数据分布不同；
-- 用户工作流语义不同；
-- 最终服务的真实应用 pipeline 不同。
+- `data/processed/workflow_library/<domain>/workflow_library.yaml`
+- `data/processed/workflow_library/<domain>/workflow_variants.csv`
+- `data/processed/workflow_library/<domain>/filter_attachments.csv`
+- `data/processed/workflow_library/<domain>/checkpoint_filter_stats.csv`
+- `data/processed/workflow_library/<domain>/order_sensitivity_families.csv`
 
-### 6.2 Workflow families 组织原则
+### 6.5 Benchmark Instance Materialization
 
-family 不按 operator catalog 命名，而按真实目标组织，例如：
+Generate final benchmark instances and deterministic references.
 
-- web cleanup
-- support-corpus sanitization
-- report residue cleanup
-- cleanup-then-filter
-- source cleanup
-- canonicalize-then-filter
+Outputs:
 
-### 6.3 难度来源
+- `data/benchmark/main.jsonl`
+- `data/benchmark/order_sensitivity.jsonl`
+- `data/benchmark/atomic_ops.jsonl`
+- summary CSVs for all three sets
 
-难度不只由步数决定，而由以下机制决定：
+This step intentionally does not generate prompts yet. Prompt generation is separated so we can later compare robust natural-language phrasings without changing the benchmark references.
 
-1. workflow 长度
-2. workflow 类型：`clean-only` / `filter-then-clean` / `clean-then-filter`
-3. 参数 grounding
-4. 不同清洗子目标的组合
-5. near-threshold filtering
+## 7. Threshold and Sampling Policy
 
-### 6.4 如果目标是 oral，这些难度机制必须成为主线
+Filter thresholds should not blindly use Data-Juicer defaults. The pipeline first scans filter status/statistics, then recalibrates thresholds during benchmark materialization.
 
-如果目标不只是“做出一个能投的 benchmark”，而是瞄准更强的投稿版本，那么下面两点不能只是附加分析，而应成为 benchmark 的主卖点：
+Main-track filter variants:
 
-1. **组合复杂度**
+- target balanced `KEEP` / `DROP`
+- choose thresholds from candidate statistic distributions
+- skip variants that cannot satisfy minimum keep/drop counts
 
-   - 必须有专门的组合保持子集或组合复杂度切片；
-   - 评测时要区分简单组合、长链组合、clean/filter 混合组合，而不是只做 paraphrase 或常规子集。
-2. **Workflow 类型差异**
+Order-sensitivity variants:
 
-   - 主榜应显式区分 `clean-only`、`filter-then-clean`、`clean-then-filter` 三类；
-   - 这三类分别对应纯改写、先粗筛再清洗、先清洗再做最终保留判断；
-   - 它们比随机顺序变体更贴近真实数据治理 pipeline。
+- use a shared threshold for `front / middle / end`
+- keep only input groups with genuine order-dependent references
+- require a minimum number of order-sensitive groups
 
-`中间状态依赖` 仍然重要，但更适合作为**任务构造与质量控制要求**，用来保证 workflow 中的每个 step 都是强 active，而不再单独作为 headline 难度机制。
+Human-facing threshold values are rounded:
 
-如果没有前面这两类机制，ICDR-Bench 仍然可能是一个扎实的 benchmark，但更像“清晰的 dataset contribution”；只有把它们做成核心实验，工作才更接近 oral 级别的 evaluative claim。
+- length/count thresholds use coarse readable values such as 5, 10, 50, 100, 1000
+- ordinary ratios use a 0.01 grid
+- very small ratios may keep finer grids such as 0.001 or 0.0001
 
-### 6.5 输出协议
+## 8. Prompting Plan
 
-主榜所有任务统一输出为：
+Final prompts should be user-facing data-refinement requests, not operator lists.
 
-- `DROP`
-- 或 `KEEP + clean_text`
+Good prompt style:
 
-主榜中 `clean_text` 是唯一 artifact 类型。
+- describes the desired data-cleaning outcome
+- mentions ordering when order matters
+- states the output contract
+- avoids Data-Juicer operator names
+- avoids exposing hidden thresholds in unnatural forms unless the task naturally requires a numeric constraint
 
-### 6.6 主榜 artifact 设计约束
+Internal metadata such as `operator_sequence`, `filter_params_by_name`, and `reference_trace` is kept for deterministic execution, debugging, and later prompt generation.
 
-ICDR-Bench v1 主榜优先采用 **closed-form、边界唯一、易 canonicalize** 的 artifact。
+## 9. Difficulty Calibration
 
-因此，主榜排除 `sentence_split_mapper` 和 `text_chunk_mapper` 这类边界敏感的 one-to-many 输出；而 `ExtractTablesFromHtmlMapper`、`LatexFigureContextExtractorMapper` 在当前 ICDR-Bench 配置中已通过 deterministic text serialization 改造成一对一 `clean_text` 输出，因此可以进入主协议。
+Difficulty should not be assigned only by workflow length.
 
-结论是：
+Recommended components:
 
-- `SentenceSplit` / `TextChunk` 不进入 v1 主榜核心 family；
-- `table extraction` / `figure-context extraction` 只有在输出被固定为 benchmark-safe 的一对一 text artifact 时才进入主榜。
+- full workflow length
+- number of clean steps
+- number of filter steps
+- threshold grounding
+- domain-specific formats such as HTML or LaTeX
+- extraction/serialization operators
+- atomic operator difficulty
+- order-sensitivity membership
 
-### 6.7 指标
+Atomic-to-compositional analysis is central:
 
-主指标：
+```text
+atomic difficulty = failure rate on single-op tasks
+compositional gap = workflow failure beyond what atomic difficulty predicts
+```
+
+This supports the claim that CDR-Bench measures compositional execution, not only isolated operator imitation.
+
+## 10. Metrics
+
+Main metrics:
 
 - `Workflow Success`
-
-次指标：
-
 - `Status Accuracy`
 - `CleanText Exact Match`
 - `CleanText Canonical Match`
-- `Composition Complexity Gap`
-- `Workflow-Type Gap`
 
-扩展实验指标：
+Main slices:
 
-- `Order-Sensitive Success`
+- domain
+- workflow type
+- workflow length
+- difficulty tier
+- `KEEP` vs `DROP`
+
+Order-sensitivity metrics:
+
+- `Order-Variant Success`
+- `Order-Family Success`
 - `Order-Consistent Success`
-- `Order-Sensitivity Gap`
 - `Wrong-Order Collapse Rate`
 
-可选诊断：
+Atomic metrics:
 
-- step probes / sentinel checks
-- per-family breakdown
-- per-difficulty breakdown
+- per-operator success rate
+- per-operator failure rate
+- atomic-to-compositional gap
 
-### 6.8 评测切片
+## 11. Target Scale
 
-建议把评测切成两部分：
+Planned formal scale:
 
-1. **主实验切片**
+- main track: around 5,000 instances
+- order-sensitivity track: around 1,000 order groups, or about 3,000 slot instances
+- atomic calibration: around 1,000 instances, roughly up to 10 per operator
 
-   - `Domain slice`：不同应用 domain
-   - `Complexity slice`：不同 operator 组合长度与组合复杂度
-   - `Workflow type slice`：`clean-only` / `filter-then-clean` / `clean-then-filter`
-   - `Paraphrase slice`：workflow 用不同自然语言表达
-2. **顺序敏感性扩展切片**
+These are targets rather than hard guarantees. Actual size depends on how many variants pass quality gates.
 
-   - 固定或近似固定 operator set，只改变顺序或 filter 插入位置
-   - 打标/构造时允许在每个 mapper checkpoint 扫描 filter status
-   - 进入主榜时不使用中间插入的 filter，只保留 `filter-then-clean` 和 `clean-then-filter`
-   - 只有同一个 `workflow + filter` 同时能形成 `front / middle / end` 三个位置时，才进入次榜 order family
-   - 只保留 deterministic reference 明显不同的 order families
-   - 用于单独评测模型是否真正跟随顺序，不进入主榜总分
+## 12. Research Value
 
-这里建议把一个顺序敏感测试单元定义为一个 `order family`：
+CDR-Bench is valuable if it can support the following claims:
 
-- 共享同一个 clean workflow skeleton
-- 共享同一个 filter
-- 包含 `front / middle / end` 三个 order variants
-- `front = filter-then-clean`
-- `middle = clean-filter-clean`
-- `end = clean-then-filter`
-- 只有当不同顺序下的 deterministic reference 确实不同，才保留该 family
+1. LLMs struggle with direct execution of compositional data-refinement requests.
+2. Errors are not reducible to single-operator failure; composition introduces additional difficulty.
+3. Filtering decisions and final text quality must be evaluated jointly.
+4. Order-sensitive families reveal whether models follow the requested operation order.
+5. Realistic domain-grounded construction is stronger than synthetic operator lists alone.
 
-在这个定义下，主 metric 可以分成两层：
+Key risks and mitigations:
 
-1. `Order-Variant Success`
+- Prompts may become too operator-like. Mitigation: keep prompt generation separate and user-facing.
+- References may overfit Data-Juicer quirks. Mitigation: report deterministic-reference scope clearly and use canonical matching where appropriate.
+- Thresholds may become unnatural. Mitigation: recalibrate and round to human-readable values.
+- Order-sensitive examples may be rare. Mitigation: keep them as a diagnostic track rather than forcing them into the main score.
 
-   - 对每个顺序变体单独计算一次标准 `Workflow Success`
-   - 回答“模型在这个具体顺序上会不会做”
-2. `Order-Consistent Success`
+## 13. Immediate Next Steps
 
-   - 以 `order family` 为单位计分
-   - 只有该 family 下 `front / middle / end` 三个顺序变体都做对，才算成功
-   - 回答“模型是否真正理解顺序，而不是碰巧在某一个顺序上做对”
-
-另外建议补两个诊断量：
-
-- `Order-Sensitivity Gap`：order-sensitive 子集与常规 compositional 子集之间的成功率差距，或同一 family 内 easiest vs hardest order variant 的成功率差距
-- `Wrong-Order Collapse Rate`：reference 明显不同的多个顺序下，模型却输出相同结果的比例；这个量能直接揭示模型是否在套默认 canonical order
-
-其中主实验部分建议至少包含三类 evaluation slices：
-
-1. `Core slice`：同 family 分布下的常规样本
-2. `Composition slice`：更长链或 clean/filter 混合 workflow 组合
-3. `Paraphrase slice`：workflow 用不同自然语言表达
-
-如果时间允许，可增加：
-4. `Source-shift slice`：来自不同数据源或不同站点/学科子域的样本
-
-### 6.9 如果目标是 oral，主实验应该长什么样
-
-oral 级别的 benchmark 不能只给一个总分表，还需要明确展示 benchmark 揭示了什么新的能力缺口。最建议的实验结构是主榜 + 扩展实验：
-
-1. **主表：Compositional Workflow Execution**
-
-   - 在 `Workflow Success` 上比较主流 frontier models；
-   - 同时报告 `Status Accuracy` 与 `CleanText Exact Match`，避免总分难以解释；
-   - 行或列按 `domain`、`workflow type` 与 `operator-composition complexity` 展开；
-   - workflow type 建议分为 `clean-only`、`filter-then-clean`、`clean-then-filter`。
-2. **扩展表：Order Sensitivity**
-
-   - 单独汇报顺序敏感子集，不与主实验混在一起；
-   - 对同一组或近似同组 operators 构造多个 order variants；
-   - 主指标建议同时报告 `Order-Variant Success` 与 `Order-Consistent Success`；
-   - 可以要求“该组多个顺序都做对才算成功”，用来测模型是否真的理解顺序，而不是只会输出一个默认 canonical order。
-3. **Mechanism breakdown**
-
-   - 在主表之外，再补 `Core / Composition / Paraphrase` 等切片；
-   - 让读者直接看到模型不是“普遍都差”，而是在哪种机制下系统性失效。
-4. **Solo vs Code gap**
-
-   - 用同一批任务比较 `Solo` 和 `Code`；
-   - 若 `Code` 明显更强，就能支持“模型理解了任务，但直接执行仍不稳定”这一更有价值的结论。
-5. **Trivial baseline check**
-
-   - 报告 regex / heuristic / scripted baseline；
-   - 证明 benchmark 的难度不是来自格式噪声，而是真正来自 workflow execution。
-6. **Per-domain application value**
-
-   - 分别展示 web、KB/support、report/policy/compliance、scientific source 四个 domain 的难点不同；
-   - 避免 reviewer 觉得这只是同一类清洗任务的重复换皮。
-
----
-
-## 7. 主模式与辅助模式
-
-### 7.1 Solo 模式（主榜）
-
-这是 ICDR-Bench 的主榜模式。
-
-- 只给模型原始样本和自然语言 workflow
-- 不允许用户额外澄清
-- 不允许外部数据处理工具
-- 不允许先显式生成 workflow 作为中间结果
-
-Solo 模式评测的是模型在无外部帮助时，是否能直接把流程执行正确。
-
-ICDR-Bench v1 不设置 Interactive 主线。原因是：
-
-- user simulator / clarification protocol 会引入额外不稳定性；
-- 当前核心问题是 direct workflow execution，而不是对话式需求澄清；
-- 去掉 Interactive 后，主榜更干净，也更容易把 domain、workflow type 和 composition complexity 讲清楚。
-
-### 7.2 Code 模式（辅助分析）
-
-Code 模式应当保留，但**不是主榜**。
-
-它的作用是回答：
-
-- 模型失败是因为没理解 workflow？
-- 还是理解了，但不会精确执行？
-
-Code 模式的约束应尽量严格：
-
-- 与 Solo 使用同一批任务、同一批 reference、同一套指标
-- 允许模型写 Python
-- 不引入 retrieval / agent planning / debugging benchmark 逻辑
-- 不把 code generation 单独包装成新的 benchmark 主任务
-
-换言之，Code 模式是 **upper-bound / diagnostic track**，而不是 ICDR-Bench 的 headline。
-
----
-
-## 8. 数据构造原则：不能只靠 pattern noise
-
-这是 ICDR-Bench 能否站住的关键。
-
-**结论：pattern-based noise 只能做 bootstrapping，不能做 final benchmark 的主体。**
-
-如果 benchmark 主要由简单规则注入生成，容易出现两类问题：
-
-- 样本过于模板化，模型和规则系统都容易做对；
-- benchmark 更像“识别注入模式”，而不是执行真实数据治理流程。
-
-### 8.1 推荐的 benchmark construction pipeline：bottom-up discovery + top-down completion
-
-更合理的构造路线不是纯 top-down，也不是纯 bottom-up，而是两者结合：
-
-1. **Bottom-up workflow discovery**
-
-   - 先在 raw corpora 上跑 operator-level tagging；
-   - 为每条样本记录 active mappers、active filter stats、domain candidates；
-   - 对每个 domain 做 co-activation analysis / clustering / frequent-combination mining；
-   - 先得到该 domain 中**真实高频、数据支持较强**的 operator combinations，再把它们聚成 workflow families。
-2. **从 discovery 结果中提炼 workflow families 与 concrete workflows**
-
-   - 先选出每个 domain 的 `3-6` 个 workflow families；
-   - 再在每个 family 下保留一批高支持度 concrete workflow candidates；
-   - 这些 candidates 可以继续人工补顺序、补 activation spec，变成最终 benchmark workflows；
-   - 长度需要显式覆盖 `2-5` 步，并尽量形成 length ladder；
-   - 这一步的目的不是让共现直接等于 workflow，而是从共现中提炼 benchmark-worthy workflows。
-3. **Top-down workflow completion**
-
-   - 对 bottom-up 中覆盖不足、但应用上重要的场景，人工预定义 workflows；
-   - 重点补齐：长链 workflows、顺序敏感 workflows、near-threshold filtering workflows、低频但关键的 domain tasks；
-   - 这部分可以通过同源真实污染、targeted splice、inverse synthesis 来补足。
-4. **统一做 executor-based validation**
-
-   - 对每条 candidate workflow 做 full-chain execution；
-   - 再做 `leave-one-step-out` ablation；
-   - 必要时做 order swap；
-   - 若某一步删掉后最终 `status` 或 `clean_text` 不变，则该 step 不是强 active，不应进入 benchmark。
-
-这个流程的核心是：
-
-- **bottom-up** 保证 workflow grounded in real data distributions；
-- **top-down** 保证 benchmark 覆盖关键应用场景；
-- **executor-based validation** 保证每一步都是真 active。
-
-基于这个构造流程，最终评测集应明确拆成两部分：
-
-1. **主实验集：Compositional Workflow Execution**
-
-   - workflow 以 domain coverage 与 operator-composition complexity 为主轴；
-   - 主榜采用 canonical / order-insensitive workflow，不随机打乱 mapper 顺序；
-   - 这里 clean 与 filter 都可作为普通步骤纳入 workflow；
-   - workflow type 分为：
-     - `clean-only`：纯清洗、规范化、脱敏或抽取；
-     - `filter-then-clean`：先对 raw text 做粗筛，再对保留样本清洗；
-     - `clean-then-filter`：先清洗，再对最终 clean text 做保留判断。
-2. **顺序敏感扩展集：Order Sensitivity**
-
-   - 从主实验 workflow family 中挑出或 top-down 补出顺序敏感 case；
-   - 对同一个 clean workflow skeleton 和同一个 filter 构造 `front / middle / end` 三个 order variants；
-   - 重点比较 `filter-then-clean`、`clean-filter-clean`、`clean-then-filter` 三个插入位置；
-   - 只保留 order 改变后 deterministic reference 确实变化的样本；
-   - 组级成功要求三个顺序都做对。
-
-### 8.2 Bottom-up 阶段的具体操作
-
-如果你希望系统发现“每个 domain 里哪些 workflows 值得做 benchmark”，比较稳的流程是：
-
-1. **先做 operator-level tagging**
-
-   - 在 raw corpora 上跑所有相关 deterministic operators；
-   - 记录每条样本的 active mapper names、active counts、domain candidates、assigned domain。
-2. **做 domain-specific clustering / frequent-combination mining**
-
-   - 对同一 domain 的样本，统计高频 active operator sets；
-   - 分析不同链长的支持度分布；
-   - 把高频共现的 operator combinations 聚成 workflow families，并选出每个 family 下最有代表性的 concrete workflow candidates。
-3. **从高频组合中挑 concrete workflows**
-
-   - 不是把所有共现都直接当 workflow；
-   - 而是优先选：高支持度、语义可解释、与 domain goal 一致、顺序有潜在意义的组合。
-4. **把 workflow 写成 activation spec**
-
-   - 为每条 concrete workflow 补上 raw requirements、intermediate requirements、filter boundary requirements；
-   - 这一步之后，workflow 才成为可搜索、可实例化、可验证的 benchmark unit。
-
-### 8.3 Top-down 阶段的具体操作
-
-如果 bottom-up 结果没有覆盖到 benchmark 需要强调的场景，则应当补一个 top-down completion 层：
-
-1. **人工预定义重要 workflows**
-
-   - 覆盖长链、顺序敏感、near-threshold、rare-but-critical 场景；
-   - 明确 step list、目标 domain、输出和 activation requirements。
-2. **在真实样本上做 targeted augmentation**
-
-   - 用同源真实噪声、splice、inverse synthesis 做补足；
-   - 补的是 benchmark coverage，不是随意手写 pattern noise。
-3. **仍然用 executor 做统一验收**
-
-   - top-down workflows 不能绕过 step-active 验证；
-   - 只有通过 full-chain 与 ablation 检查的样本才能进入 benchmark。
-
-### 8.4 推荐的四路数据构造策略
-
-#### 路线 A：Natural-noise route
-
-直接从原始公开语料中取天然带噪样本：
-
-- raw HTML
-- docs/help/support text
-- long-form reports / filings / policy documents
-- LaTeX source
-- 文档 boilerplate
-- 重复段落 / 标题 / 导航 / footer / bibliography / comments
-
-这类数据最真实，也最不容易被简单 pattern baseline 秒杀。
-
-#### 路线 B：Operator-aware inverse synthesis
-
-从较干净的 reference artifact 出发，按目标 workflow 的“逆方向”构造前像：
-
-- 给 clean text 包回 HTML / links / footer / contact blocks
-- 给 clean document 注入重复句、异常空白、异常标点
-- 给 clean TeX 加回 comments、header、bibliography、macro aliases
-
-这里的关键不是随便加噪，而是**围绕目标 operator 的可逆前像去设计 corruption**。
-
-#### 路线 C：Contamination / splice route
-
-把同站点、同论文、同文档集合中的真实干扰片段拼接进来，例如：
-
-- 导航栏、目录、页脚、免责声明
-- unrelated but same-site snippets
-- duplicated boilerplate from neighboring sections
-- figure captions or bibliography fragments leaking into body text
-
-这种污染比单纯 regex noise 更接近真实脏数据来源。
-
-#### 路线 D：Hard-threshold calibration
-
-专门构造 near-threshold 样本：
-
-- 长度刚好在阈值附近
-- 特殊字符比例接近边界
-- 重复率接近边界
-- 平均行长 / 最大行长刚好越过边界
-
-这些样本最能拉开模型执行细粒度规则的能力差异。
-
-### 8.5 数据保留标准
-
-最终进入 benchmark 的样本应满足：
-
-1. workflow 的 reference 可被 deterministic executor 唯一确定；
-2. artifact 比较可 canonicalize；
-3. 不应被单条 regex 或单步启发式轻易解决；
-4. 不应主要依赖显式算子名关键词触发；
-5. 在不同组合复杂度切片中仍然具有区分度。
-6. 对主榜样本，移除任一步后，最终 `status` 或 `clean_text` 必须改变。
-
-### 8.6 质量控制建议
-
-建议维护三类 sanity baseline：
-
-- regex / heuristic baseline
-- simple scripted pipeline baseline
-- frontier LLM zero-shot baseline
-
-若某类任务被 trivial baseline 大规模秒杀，则应当：
-
-- 提升组合复杂度
-- 提升边界样本比例
-- 换成更真实的自然噪声或污染源
-
----
-
-## 9. Benchmark 规模建议（一个月可落地版本）
-
-建议先做一个可投 MVP，而不是大而全版本。
-
-### 9.1 推荐规模
-
-- `4` 个 domain
-- 每个 domain `3-4` 个 family
-- 每个 family `3` 档难度
-- 每档 `60-120` 个样本
-
-这样得到的规模约为：
-
-- `4 domains × 3 families × 3 difficulties × 80 ≈ 2880` 样本
-- 若做到更完整版本，可扩到 `4 × 4 × 3 × 100 ≈ 4800` 样本
-
-### 9.2 推荐优先级
-
-第一优先级：
-
-- Solo direct-execution 主榜
-- 4 个应用场景明确的 text-first domains：`web crawl`、`KB/support`、`reports/policy/compliance`、`scientific source`
-- Workflow Success + clean-text metrics
-- domain slice + workflow type slice + complexity slice
-
-第二优先级：
-
-- order-sensitivity extension
-- Code upper-bound track
-- paraphrase split
-- sentinel probes
-
-第三优先级：
-
-- 更大规模 domain 扩展
-- 更强的 source-shift / paraphrase 扩展
-
----
-
-## 10. 一个月落地路线
-
-### 第 1 周
-
-- 固化任务定义、指标、输出协议
-- 固化 4 个 domains 和 12-14 个 workflow families
-- 固化 operator 子集
-- 固化主榜 workflow type：`clean-only`、`filter-then-clean`、`clean-then-filter`
-
-### 第 2 周
-
-- 实现数据构造与 deterministic executor
-- 先做 200-300 个 pilot 样本
-- 跑 trivial baseline 和 1-2 个 LLM baseline 做难度校准
-- 从 pilot 中校准 filter 阈值与 workflow type 覆盖
-
-### 第 3 周
-
-- 扩展到正式 benchmark 规模
-- 完成主榜评测集
-- 完成 order-sensitivity extension
-- 跑主模型实验
-
-### 第 4 周
-
-- 跑 Code track 上界
-- 做 domain / workflow type / complexity / order-sensitivity failure analysis
-- 写论文图表与主要结论
-
----
-
-## 11. 最终主张
-
-ICDR-Bench 最稳的贡献不在于“算子更多”或“模态更多”，而在于以下组合：
-
-- 非结构化文本/文档数据治理
-- 完整自然语言 workflow specification
-- direct execution rather than planning/generation
-- deterministic operator-backed reference
-- clean-text-level end-to-end evaluation
-
-如果这五点同时成立，ICDR-Bench 就不会只是“又一个数据处理 benchmark”，而会是一个任务定义清楚、实验上可落地、审稿时也能说清楚边界的新 benchmark。
+1. Regenerate workflow mining outputs after fallback exclusion.
+2. Regenerate workflow library with current threshold rounding.
+3. Regenerate benchmark instances for main, order sensitivity, and atomic operators.
+4. Inspect summary CSVs for skipped variants, keep/drop balance, and order-family counts.
+5. Implement workflow-to-prompt generation from metadata.
+6. Run pilot models on atomic, main, and order tracks.
+7. Calibrate difficulty tiers using atomic failure rates and pilot workflow results.

@@ -64,7 +64,7 @@ def validate_variant_for_tagging(variant: dict[str, Any]) -> None:
     if variant['name'] in ROW_EXPANDING_MAPPERS:
         raise SystemExit(
             f"unsupported row-expanding mapper in tagging pipeline: {variant['name']}. "
-            'Current ICDR-Bench tagging assumes one input row maps to one output row. '
+            'Current CDR-Bench tagging assumes one input row maps to one output row. '
             'Remove this mapper from configs/domains.yaml or convert it to a one-to-one text mode first.'
         )
 

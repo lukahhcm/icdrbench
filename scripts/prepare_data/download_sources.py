@@ -15,7 +15,7 @@ from icdrbench.fetchers import iter_domain_records, write_jsonl
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description='Download small bootstrap corpora for ICDR-Bench domains.')
+    parser = argparse.ArgumentParser(description='Download small bootstrap corpora for CDR-Bench domains.')
     parser.add_argument('--config', default='configs/domains.yaml')
     parser.add_argument('--out-dir', default='data/raw')
     parser.add_argument('--domains', nargs='*', default=None)

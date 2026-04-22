@@ -19,6 +19,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 def _resolve_data_juicer_repo_root() -> Path:
     env_candidates = [
+        os.environ.get('CDRBENCH_DATA_JUICER_ROOT'),
         os.environ.get('ICDRBENCH_DATA_JUICER_ROOT'),
         os.environ.get('DATA_JUICER_ROOT'),
     ]
@@ -29,8 +30,8 @@ def _resolve_data_juicer_repo_root() -> Path:
             return candidate
     joined = ', '.join(str(path) for path in candidates)
     raise FileNotFoundError(
-        'Unable to locate a Data-Juicer checkout. Set ICDRBENCH_DATA_JUICER_ROOT '
-        f'or DATA_JUICER_ROOT to the Data-Juicer repo root. Tried: {joined}'
+        'Unable to locate a Data-Juicer checkout. Set CDRBENCH_DATA_JUICER_ROOT, '
+        f'ICDRBENCH_DATA_JUICER_ROOT, or DATA_JUICER_ROOT to the Data-Juicer repo root. Tried: {joined}'
     )
 
 
