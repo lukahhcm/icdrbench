@@ -316,6 +316,205 @@ def _load_domain_workflows(workflow_library_dir: Path) -> dict[str, dict[str, An
     return workflows
 
 
+def _active_records_for_mapper(
+    records: list[dict[str, Any]],
+    mapper_name: str,
+    max_records: int,
+    salt: str,
+) -> list[dict[str, Any]]:
+    active_records = []
+    for record in records:
+        active = set(_labeling_meta(record).get('active_mapper_names', []))
+        if mapper_name in active:
+            active_records.append(record)
+    active_records.sort(key=lambda row: _stable_id(salt, row.get('id'), row.get('source_name'), row.get('url')))
+    return active_records[:max_records]
+
+
+def _atomic_record(
+    *,
+    domain: str,
+    op_name: str,
+    op_kind: str,
+    record: dict[str, Any],
+    params_by_name: dict[str, dict[str, Any]],
+    execution: dict[str, Any],
+    threshold_meta: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        'instance_id': _stable_id('atomic', domain, op_name, _record_id(record)),
+        'benchmark_track': 'atomic',
+        'domain': domain,
+        'operator': op_name,
+        'operator_kind': op_kind,
+        'source_record_id': _record_id(record),
+        'input_text': str(record.get('text', '')),
+        'operator_sequence': [op_name],
+        'filter_params_by_name': params_by_name,
+        'threshold_meta': threshold_meta or {},
+        'reference_status': execution['reference_status'],
+        'reference_text': execution['reference_text'],
+        'intermediate_text_at_drop': execution.get('intermediate_text_at_drop'),
+        'reference_trace': execution['trace'],
+    }
+
+
+def _materialize_atomic_mapper(
+    domain: str,
+    op_name: str,
+    records: list[dict[str, Any]],
+    operators_by_name: dict[str, dict[str, Any]],
+    args: argparse.Namespace,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    candidates = _active_records_for_mapper(records, op_name, args.max_atomic_candidate_records, f'atomic:{domain}:{op_name}')
+    rows = []
+    for record in candidates:
+        try:
+            execution = _execute_workflow(record, [op_name], operators_by_name)
+        except Exception:
+            continue
+        if execution['reference_status'] == 'KEEP' and execution['reference_text'] != str(record.get('text', '')):
+            rows.append(
+                _atomic_record(
+                    domain=domain,
+                    op_name=op_name,
+                    op_kind='mapper',
+                    record=record,
+                    params_by_name={},
+                    execution=execution,
+                )
+            )
+        if len(rows) >= args.max_atomic_instances_per_op:
+            break
+    return rows, {
+        'domain': domain,
+        'operator': op_name,
+        'operator_kind': 'mapper',
+        'status': 'kept' if rows else 'skipped_no_active_outputs',
+        'candidate_count': len(candidates),
+        'selected_count': len(rows),
+        'selected_keep_count': len(rows),
+        'selected_drop_count': 0,
+        'threshold_meta': {},
+        'filter_params': {},
+    }
+
+
+def _materialize_atomic_filter(
+    domain: str,
+    op_name: str,
+    records: list[dict[str, Any]],
+    operators_by_name: dict[str, dict[str, Any]],
+    args: argparse.Namespace,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    candidates = sorted(
+        records,
+        key=lambda row: _stable_id(f'atomic:{domain}:{op_name}', row.get('id'), row.get('source_name'), row.get('url')),
+    )[: args.max_atomic_candidate_records]
+    base_params = _base_params(op_name, operators_by_name)
+    values = []
+    value_key = None
+    value_records = []
+    for record in candidates:
+        try:
+            value, current_value_key = _filter_value(record, [op_name], 0, base_params, operators_by_name)
+        except Exception:
+            continue
+        value_key = value_key or current_value_key
+        if value is not None:
+            values.append(value)
+            value_records.append(record)
+
+    calibrated_params, threshold_meta = _calibrate_filter_params_for_target(
+        op_name,
+        base_params,
+        values,
+        args.target_drop_rate,
+    )
+    threshold_meta = {
+        **threshold_meta,
+        'filter_name': op_name,
+        'status_value_key': value_key,
+        'value_count': len(values),
+        'atomic_filter': True,
+    }
+    params_by_name = {op_name: calibrated_params}
+    keep_rows = []
+    drop_rows = []
+    for record in value_records:
+        try:
+            execution = _execute_workflow(record, [op_name], operators_by_name, params_by_name)
+        except Exception:
+            continue
+        row = _atomic_record(
+            domain=domain,
+            op_name=op_name,
+            op_kind='filter',
+            record=record,
+            params_by_name=params_by_name,
+            execution=execution,
+            threshold_meta=threshold_meta,
+        )
+        if execution['reference_status'] == 'KEEP':
+            keep_rows.append(row)
+        else:
+            drop_rows.append(row)
+
+    selected = _select_balanced(keep_rows, drop_rows, args.max_atomic_instances_per_op, args.target_drop_rate)
+    has_min_balance = len(keep_rows) >= args.min_atomic_keep and len(drop_rows) >= args.min_atomic_drop
+    selected_rows = selected if has_min_balance else []
+    return selected_rows, {
+        'domain': domain,
+        'operator': op_name,
+        'operator_kind': 'filter',
+        'status': 'kept' if selected_rows else 'skipped_unbalanced',
+        'candidate_count': len(candidates),
+        'value_count': len(values),
+        'keep_count': len(keep_rows),
+        'drop_count': len(drop_rows),
+        'selected_count': len(selected_rows),
+        'selected_keep_count': sum(1 for row in selected_rows if row['reference_status'] == 'KEEP'),
+        'selected_drop_count': sum(1 for row in selected_rows if row['reference_status'] == 'DROP'),
+        'threshold_meta': threshold_meta,
+        'filter_params': calibrated_params,
+    }
+
+
+def _materialize_atomic_ops(
+    records_by_domain: dict[str, list[dict[str, Any]]],
+    plan: dict[str, Any],
+    operators_by_name: dict[str, dict[str, Any]],
+    args: argparse.Namespace,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    rows: list[dict[str, Any]] = []
+    summary_rows: list[dict[str, Any]] = []
+    variants_by_key = plan['execution_variants_by_key']
+    for domain in sorted(plan['domain_profiles']):
+        profile = plan['domain_profiles'][domain]
+        records = records_by_domain.get(domain, [])
+        mapper_names = [variants_by_key[key]['name'] for key in profile['mapper_keys']]
+        filter_names = [variants_by_key[key]['name'] for key in profile['filter_keys']]
+        _log(f'atomic {domain}: {len(mapper_names)} mappers, {len(filter_names)} filters, {len(records)} records')
+
+        for op_name in mapper_names:
+            op_rows, summary = _materialize_atomic_mapper(domain, op_name, records, operators_by_name, args)
+            rows.extend(op_rows)
+            summary_rows.append(summary)
+            _log(f"  atomic mapper {domain}/{op_name}: {summary['status']} selected={summary['selected_count']}")
+
+        for op_name in filter_names:
+            op_rows, summary = _materialize_atomic_filter(domain, op_name, records, operators_by_name, args)
+            rows.extend(op_rows)
+            summary_rows.append(summary)
+            _log(
+                f"  atomic filter {domain}/{op_name}: {summary['status']} "
+                f"selected={summary['selected_count']} keep={summary.get('selected_keep_count', 0)} "
+                f"drop={summary.get('selected_drop_count', 0)}"
+            )
+
+    return rows, summary_rows
+
+
 def _materialize_main_variant(
     domain: str,
     workflow: dict[str, Any],
@@ -545,6 +744,11 @@ def main() -> None:
     parser.add_argument('--min-drop', type=int, default=5)
     parser.add_argument('--min-order-sensitive-groups', type=int, default=5)
     parser.add_argument('--target-drop-rate', type=float, default=0.5)
+    parser.add_argument('--max-atomic-candidate-records', type=int, default=256)
+    parser.add_argument('--max-atomic-instances-per-op', type=int, default=20)
+    parser.add_argument('--min-atomic-keep', type=int, default=5)
+    parser.add_argument('--min-atomic-drop', type=int, default=5)
+    parser.add_argument('--skip-atomic', action='store_true', help='Only materialize main/order instances.')
     args = parser.parse_args()
 
     root = ROOT
@@ -579,8 +783,13 @@ def main() -> None:
 
     main_rows: list[dict[str, Any]] = []
     order_rows: list[dict[str, Any]] = []
+    atomic_rows: list[dict[str, Any]] = []
     main_summary_rows: list[dict[str, Any]] = []
     order_summary_rows: list[dict[str, Any]] = []
+    atomic_summary_rows: list[dict[str, Any]] = []
+
+    if not args.skip_atomic:
+        atomic_rows, atomic_summary_rows = _materialize_atomic_ops(records_by_domain, plan, operators_by_name, args)
 
     for domain_index, (domain, domain_yaml) in enumerate(sorted(domain_workflows.items()), start=1):
         workflows = list(domain_yaml.get('workflows') or [])
@@ -614,11 +823,16 @@ def main() -> None:
 
     main_count = _write_jsonl(output_dir / 'main.jsonl', main_rows)
     order_count = _write_jsonl(output_dir / 'order_sensitivity.jsonl', order_rows)
+    atomic_count = _write_jsonl(output_dir / 'atomic_ops.jsonl', atomic_rows) if not args.skip_atomic else 0
     pd.DataFrame(main_summary_rows).to_csv(output_dir / 'main_summary.csv', index=False)
     pd.DataFrame(order_summary_rows).to_csv(output_dir / 'order_sensitivity_summary.csv', index=False)
+    if not args.skip_atomic:
+        pd.DataFrame(atomic_summary_rows).to_csv(output_dir / 'atomic_ops_summary.csv', index=False)
 
     _log(f'wrote main instances: {main_count} -> {output_dir / "main.jsonl"}')
     _log(f'wrote order-sensitivity instances: {order_count} -> {output_dir / "order_sensitivity.jsonl"}')
+    if not args.skip_atomic:
+        _log(f'wrote atomic-op instances: {atomic_count} -> {output_dir / "atomic_ops.jsonl"}')
     _log(f'wrote summaries -> {output_dir}')
 
 

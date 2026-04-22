@@ -282,17 +282,22 @@ column -s, -t < data/processed/workflow_library/workflow_library_summary.csv | l
   --workflow-library-dir data/processed/workflow_library \
   --filtered-path data/processed/domain_filtered/all.jsonl \
   --output-dir data/benchmark \
-  --target-drop-rate 0.5
+  --target-drop-rate 0.5 \
+  --max-atomic-instances-per-op 20
 ```
 
 这一步暂时不生成 prompt，只做样本选择和 GT：
 
 - 主榜写到 `data/benchmark/main.jsonl`
 - 顺序敏感次榜写到 `data/benchmark/order_sensitivity.jsonl`
+- 单算子 atomic 集写到 `data/benchmark/atomic_ops.jsonl`
 - 主榜 summary 写到 `data/benchmark/main_summary.csv`
 - 次榜 summary 写到 `data/benchmark/order_sensitivity_summary.csv`
+- 单算子 summary 写到 `data/benchmark/atomic_ops_summary.csv`
 
 主榜带 filter 的 workflow 会重新按目标 drop rate 校准阈值，然后尽量均衡抽取 KEEP/DROP 样本。次榜按 `order_family` 校准共享阈值，同一个输入同时跑 `front / middle / end`，只保留至少两个 slot 的 reference 不同的样本。
+
+单算子 atomic 集用于后续估计 `Operator Atomic Difficulty`：mapper 只保留输出确实变化的样本，filter 会按同样的 `target-drop-rate` 校准阈值并尽量均衡 KEEP/DROP。若暂时不想生成 atomic 集，可以加 `--skip-atomic`。
 
 如果你后面要把 workflow 自动转成自然语言指令，可以直接参考：
 
@@ -321,8 +326,10 @@ column -s, -t < data/processed/workflow_library/workflow_library_summary.csv | l
 - benchmark 样本和 GT：
   - `data/benchmark/main.jsonl`
   - `data/benchmark/order_sensitivity.jsonl`
+  - `data/benchmark/atomic_ops.jsonl`
   - `data/benchmark/main_summary.csv`
   - `data/benchmark/order_sensitivity_summary.csv`
+  - `data/benchmark/atomic_ops_summary.csv`
 
 ## 常用补充
 
