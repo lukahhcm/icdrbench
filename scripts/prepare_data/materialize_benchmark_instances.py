@@ -211,7 +211,8 @@ def _calibrate_filter_params_for_target(
         'target_drop_rate': target_drop_rate,
         'threshold_quantile': q,
         'threshold_direction': calibration['direction'],
-        'threshold_value': _round_float(threshold),
+        'threshold_raw_value': _round_float(threshold),
+        'threshold_value': _format_threshold_value(threshold, rule['min_key' if calibration['direction'] == 'min' else 'max_key']),
     }
 
 

@@ -50,6 +50,8 @@ FILTER_CALIBRATION_RULES: dict[str, dict[str, Any]] = {
     'words_num_filter': {'direction': 'min', 'quantile': 0.20},
 }
 INTEGER_THRESHOLD_KEYS = {'min_len', 'max_len', 'min_num', 'max_num'}
+RATIO_THRESHOLD_KEYS = {'min_ratio', 'max_ratio'}
+RATIO_THRESHOLD_STEP = 0.05
 
 SAFE_MAX_CHARS_FOR_EXPENSIVE_MAPPERS = 80_000
 EXPENSIVE_LONG_TEXT_MAPPERS = {
@@ -204,11 +206,33 @@ def _round_float(value: float | None) -> float | None:
     return round(value, 6) if value is not None else None
 
 
+def _integer_threshold_step(value: float) -> int:
+    abs_value = abs(value)
+    if abs_value <= 10:
+        return 1
+    if abs_value <= 50:
+        return 5
+    if abs_value <= 100:
+        return 10
+    if abs_value <= 1_000:
+        return 50
+    if abs_value <= 10_000:
+        return 100
+    return 1_000
+
+
 def _format_threshold_value(value: float | None, param_key: str) -> int | float | None:
     if value is None:
         return None
     if param_key in INTEGER_THRESHOLD_KEYS:
-        return int(round(value))
+        step = _integer_threshold_step(value)
+        rounded = int(round(value / step) * step)
+        return max(1, rounded) if value > 0 else rounded
+    if param_key in RATIO_THRESHOLD_KEYS:
+        rounded = round(value / RATIO_THRESHOLD_STEP) * RATIO_THRESHOLD_STEP
+        if value > 0 and rounded == 0:
+            rounded = RATIO_THRESHOLD_STEP
+        return round(min(max(rounded, 0.0), 1.0), 2)
     return _round_float(value)
 
 

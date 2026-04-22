@@ -299,6 +299,8 @@ column -s, -t < data/processed/workflow_library/workflow_library_summary.csv | l
 
 单算子 atomic 集用于后续估计 `Operator Atomic Difficulty`：mapper 只保留输出确实变化的样本，filter 会按同样的 `target-drop-rate` 校准阈值并尽量均衡 KEEP/DROP。若暂时不想生成 atomic 集，可以加 `--skip-atomic`。
 
+校准出来的阈值会被转成更像真实需求里的粗粒度数值：长度/数量阈值会落到 5、10、50、100、1000 等可读档位，ratio 阈值会落到 0.05 的网格。summary 里仍会保留 `threshold_raw_value` 方便 debug。
+
 如果你后面要把 workflow 自动转成自然语言指令，可以直接参考：
 
 - `configs/workflow_prompting.yaml`
