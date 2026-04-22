@@ -273,6 +273,27 @@ column -s, -t < data/processed/workflow_library/workflow_library_summary.csv | l
 
 这里会显示每个 filter 在 `S0/S1/.../Sfinal` 的 `mean/p20/p50/p80` 以及相邻 checkpoint 的变化量。
 
+## 8. 生成 benchmark 样本和 GT
+
+`workflow_library` 只是 workflow 草案。要生成真正可评测的数据和 Data-Juicer reference，继续跑：
+
+```bash
+.venv-ops/bin/python scripts/prepare_data/materialize_benchmark_instances.py \
+  --workflow-library-dir data/processed/workflow_library \
+  --filtered-path data/processed/domain_filtered/all.jsonl \
+  --output-dir data/benchmark \
+  --target-drop-rate 0.5
+```
+
+这一步暂时不生成 prompt，只做样本选择和 GT：
+
+- 主榜写到 `data/benchmark/main.jsonl`
+- 顺序敏感次榜写到 `data/benchmark/order_sensitivity.jsonl`
+- 主榜 summary 写到 `data/benchmark/main_summary.csv`
+- 次榜 summary 写到 `data/benchmark/order_sensitivity_summary.csv`
+
+主榜带 filter 的 workflow 会重新按目标 drop rate 校准阈值，然后尽量均衡抽取 KEEP/DROP 样本。次榜按 `order_family` 校准共享阈值，同一个输入同时跑 `front / middle / end`，只保留至少两个 slot 的 reference 不同的样本。
+
 如果你后面要把 workflow 自动转成自然语言指令，可以直接参考：
 
 - `configs/workflow_prompting.yaml`
@@ -284,7 +305,7 @@ column -s, -t < data/processed/workflow_library/workflow_library_summary.csv | l
 - TSV 序列化规范
 - 后续 `workflow -> prompt` 代码可以直接复用的 prompt template
 
-## 7. 最终你会拿到什么
+## 9. 最终你会拿到什么
 
 如果整条流程跑完，当前 repo 里最重要的产物是：
 
@@ -297,6 +318,11 @@ column -s, -t < data/processed/workflow_library/workflow_library_summary.csv | l
 - 底层追踪信息：
   - `data/processed/domain_tags/*.jsonl`
   - `data/processed/dj_cli_tagging/`
+- benchmark 样本和 GT：
+  - `data/benchmark/main.jsonl`
+  - `data/benchmark/order_sensitivity.jsonl`
+  - `data/benchmark/main_summary.csv`
+  - `data/benchmark/order_sensitivity_summary.csv`
 
 ## 常用补充
 
