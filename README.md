@@ -252,14 +252,15 @@ Atomic calibration:
 
 Prompt generation is intentionally separate from GT construction, so prompt wording can be revised without rerunning Data-Juicer references.
 
-Generate prompt JSONL files:
+Generate workflow-level prompt candidates with an external LLM:
 
 ```bash
 .venv-ops/bin/python scripts/prepare_data/generate_benchmark_prompts.py \
   --benchmark-dir data/benchmark \
   --output-dir data/benchmark_prompts \
   --prompt-config configs/workflow_prompting.yaml \
-  --prompt-style user_natural_v1
+  --prompt-source llm \
+  --variants-per-workflow 6
 ```
 
 Outputs:
@@ -267,36 +268,63 @@ Outputs:
 - `data/benchmark_prompts/main.jsonl`
 - `data/benchmark_prompts/order_sensitivity.jsonl`
 - `data/benchmark_prompts/atomic_ops.jsonl`
+- `data/benchmark_prompts/workflow_prompt_library.jsonl`
 - `data/benchmark_prompts/prompt_generation_summary.jsonl`
 
-Each row keeps the original benchmark fields and adds:
+Track files keep the original benchmark rows and attach:
 
-- `system_prompt`
-- `user_prompt`
-- `prompt`
-- `messages`
-- `expected_response_format`
+- `workflow_prompt_key`
+- `prompt_candidate_count`
 
-The default prompt is a natural-language user request, not an operator list. It uses these metadata sources:
+`workflow_prompt_library.jsonl` stores the actual prompt candidates for each unique workflow. The generator reads operator source code, operator docs, workflow order, and filter params, then asks an external LLM to produce multiple stylistically diverse user-facing requests for the same workflow.
+
+The default generation flow hides operator names and parameter names from the final prompt, while still preserving:
 
 - `data/processed/workflow_library/<domain>/workflow_library.yaml`
 - `configs/workflow_prompting.yaml`
 - `data/benchmark/*.jsonl`
 
-The prompt states:
+The generated prompt candidates should preserve:
 
 - the user-facing refinement goal
 - the required order when order matters
 - the output contract: `status` and `clean_text`
+- natural threshold semantics when needed
+- stylistic diversity across different users
+
+By default, prompt generation skips workflows containing `flagged_words_filter` and `stopwords_filter`.
+
+Then run the LLM judge:
+
+```bash
+.venv-ops/bin/python scripts/prepare_data/judge_benchmark_prompts.py \
+  --prompt-library data/benchmark_prompts/workflow_prompt_library.jsonl \
+  --output-dir data/benchmark_prompts/judged
+```
+
+Judge outputs:
+
+- `data/benchmark_prompts/judged/workflow_prompt_library.judged.jsonl`
+- `data/benchmark_prompts/judged/workflow_prompt_library.accepted.jsonl`
+
+The judge checks:
+
+- workflow functional equivalence
+- correct operation order
+- correct JSON output contract
+- absence of operator/code leakage
+- user naturalness
+- threshold grounding
+- clarity and format consistency
 
 For debugging only, you can append hidden operator names to each step:
 
 ```bash
 .venv-ops/bin/python scripts/prepare_data/generate_benchmark_prompts.py \
-  --include-internal-operator-names
+  --prompt-source template
 ```
 
-Do not use that debug mode for headline model evaluation.
+Do not use template fallback for headline model evaluation.
 
 ## 10. Troubleshooting Data-Juicer Imports
 
