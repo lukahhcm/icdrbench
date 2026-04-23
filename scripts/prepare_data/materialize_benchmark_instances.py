@@ -162,6 +162,16 @@ def _within_input_char_limit(record: dict[str, Any], max_input_chars: int) -> bo
     return max_input_chars <= 0 or len(str(record.get('text', ''))) <= max_input_chars
 
 
+def _input_length_bucket(input_length_chars: int) -> str:
+    if input_length_chars <= 4_000:
+        return 'short'
+    if input_length_chars <= 16_000:
+        return 'medium'
+    if input_length_chars <= 50_000:
+        return 'long'
+    return 'very_long'
+
+
 def _candidate_limit(max_records: int) -> int | None:
     return max_records if max_records > 0 else None
 
@@ -360,10 +370,13 @@ def _variant_record(
     threshold_meta: dict[str, Any] | None,
 ) -> dict[str, Any]:
     instance_id = _stable_id(base.get('workflow_variant_id'), _record_id(record))
+    input_text = str(record.get('text', ''))
     return {
         'instance_id': instance_id,
         'source_record_id': _record_id(record),
-        'input_text': str(record.get('text', '')),
+        'input_text': input_text,
+        'input_length_chars': len(input_text),
+        'input_length_bucket': _input_length_bucket(len(input_text)),
         'operator_sequence': sequence,
         'filter_params_by_name': filter_params_by_name,
         'threshold_meta': threshold_meta or {},
@@ -452,6 +465,7 @@ def _atomic_record(
     threshold_meta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     source_domain = str(record.get('domain') or 'unknown')
+    input_text = str(record.get('text', ''))
     return {
         'instance_id': _stable_id('atomic', op_name, _record_id(record)),
         'benchmark_track': 'atomic',
@@ -460,7 +474,9 @@ def _atomic_record(
         'operator': op_name,
         'operator_kind': op_kind,
         'source_record_id': _record_id(record),
-        'input_text': str(record.get('text', '')),
+        'input_text': input_text,
+        'input_length_chars': len(input_text),
+        'input_length_bucket': _input_length_bucket(len(input_text)),
         'operator_sequence': [op_name],
         'filter_params_by_name': params_by_name,
         'threshold_meta': threshold_meta or {},
@@ -966,7 +982,7 @@ def main() -> None:
     parser.add_argument(
         '--max-input-chars',
         type=int,
-        default=80_000,
+        default=50_000,
         help='Skip raw inputs longer than this many characters before materialization; 0 disables the limit.',
     )
     parser.add_argument(

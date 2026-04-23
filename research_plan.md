@@ -227,6 +227,7 @@ Recommended components:
 - number of clean steps
 - number of filter steps
 - threshold grounding
+- input length bucket
 - domain-specific formats such as HTML or LaTeX
 - extraction/serialization operators
 - atomic operator difficulty
@@ -255,6 +256,7 @@ Main slices:
 - domain
 - workflow type
 - workflow length
+- input length bucket
 - difficulty tier
 - `KEEP` vs `DROP`
 

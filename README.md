@@ -183,7 +183,7 @@ column -s, -t < data/processed/workflow_library/web/checkpoint_filter_stats.csv 
   --output-dir data/benchmark \
   --target-drop-rate 0.5 \
   --max-candidate-records 0 \
-  --max-input-chars 80000 \
+  --max-input-chars 50000 \
   --min-positive-ratio-threshold 0.001 \
   --zero-ratio-threshold-policy min-positive \
   --max-instances-per-variant 50 \
@@ -219,7 +219,7 @@ Important parameters:
 
 - `--target-drop-rate 0.5`: calibrate filter tasks toward 50% `KEEP` and 50% `DROP`
 - `--max-candidate-records 0`: scan all eligible candidate samples per workflow variant or order family; set a positive number such as `2000` for a faster capped run
-- `--max-input-chars 80000`: skip raw inputs above 80k characters before GT materialization, keeping tasks within a practical prompt budget; use `0` to disable
+- `--max-input-chars 50000`: skip raw inputs above 50k characters before GT materialization, keeping tasks within a practical prompt budget for recent strong models; use `0` to disable
 - `--min-positive-ratio-threshold 0.001`: when a calibrated ratio threshold is exactly `0`, first try a small positive threshold instead of creating an unnatural zero-ratio task
 - `--max-instances-per-variant 50`: cap main-track instances per workflow variant
 - `--max-order-groups-per-family 30`: cap order groups per order family
@@ -241,6 +241,7 @@ Main benchmark:
 - `workflow_type` tells whether the row is `clean-only`, `filter-then-clean`, or `clean-then-filter`.
 - `reference_status` and `reference_text` are the deterministic GT.
 - Workflow length can be recovered from the operator sequence fields in each row.
+- `input_length_chars` and `input_length_bucket` support difficulty analysis without splitting the main benchmark by length.
 
 Order-sensitivity benchmark:
 
