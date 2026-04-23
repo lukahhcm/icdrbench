@@ -197,7 +197,7 @@ def build_filtered_record(
     else:
         meta = {'raw_meta': raw_meta}
 
-    meta['icdrbench_domain_labeling'] = {
+    meta['cdrbench_domain_labeling'] = {
         'source_corpus': corpus_name,
         'original_domain': record.get('domain'),
         'assigned_domain': assigned_domain,

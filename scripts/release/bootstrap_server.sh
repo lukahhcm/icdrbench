@@ -5,9 +5,9 @@ set -euo pipefail
 #
 # Example:
 #   HF_TOKEN=hf_xxx ./scripts/release/bootstrap_server.sh \
-#     --github-url https://github.com/yourname/icdrbench.git \
-#     --hf-dataset yourname/icdrbench-raw \
-#     --workdir ~/work/icdrbench
+#     --github-url https://github.com/yourname/cdrbench.git \
+#     --hf-dataset yourname/cdrbench-raw \
+#     --workdir ~/work/cdrbench
 
 usage() {
   cat <<'EOF'
@@ -16,10 +16,10 @@ Usage:
 
 Required:
   --github-url      GitHub repository URL
-  --hf-dataset      Hugging Face dataset repo id, e.g. yourname/icdrbench-raw
+  --hf-dataset      Hugging Face dataset repo id, e.g. yourname/cdrbench-raw
 
 Optional:
-  --workdir         Local workspace directory (default: ~/work/icdrbench)
+  --workdir         Local workspace directory (default: ~/work/cdrbench)
   --branch          Branch to checkout (default: main)
   --run-probe       Immediately run Data-Juicer per-op probe after setup
 
@@ -33,7 +33,7 @@ EOF
 
 GITHUB_URL=""
 HF_DATASET=""
-WORKDIR="$HOME/work/icdrbench"
+WORKDIR="$HOME/work/cdrbench"
 BRANCH="main"
 DATA_SUBDIR="raw"
 RUN_PROBE="false"

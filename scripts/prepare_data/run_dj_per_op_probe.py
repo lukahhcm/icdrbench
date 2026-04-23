@@ -177,7 +177,7 @@ def main() -> None:
                     op=op,
                     export_path=export_path,
                     np=args.np,
-                    project_name=f'icdrbench-{corpus}-{domain}-{op_name}-analyze',
+                    project_name=f'cdrbench-{corpus}-{domain}-{op_name}-analyze',
                 )
                 cmd = [str(analyze_bin), '--config', str(cfg_path)]
                 mode = 'analyze'
@@ -201,7 +201,7 @@ def main() -> None:
                     op=op,
                     export_path=export_path,
                     np=args.np,
-                    project_name=f'icdrbench-{corpus}-{domain}-{op_name}-process',
+                    project_name=f'cdrbench-{corpus}-{domain}-{op_name}-process',
                 )
                 cmd = [str(process_bin), '--config', str(cfg_path)]
                 mode = 'process'

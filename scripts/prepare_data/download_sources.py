@@ -10,8 +10,8 @@ SRC = ROOT / 'src'
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from icdrbench.config import load_domains_config
-from icdrbench.fetchers import iter_domain_records, write_jsonl
+from cdrbench.config import load_domains_config
+from cdrbench.fetchers import iter_domain_records, write_jsonl
 
 
 def main() -> None:

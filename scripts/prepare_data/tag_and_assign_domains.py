@@ -18,8 +18,8 @@ SRC = ROOT / 'src'
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from icdrbench.config import load_domains_config
-from icdrbench.domain_assignment import (
+from cdrbench.config import load_domains_config
+from cdrbench.domain_assignment import (
     build_domain_execution_plan,
     build_filtered_record,
     domain_operator_catalog_frame,
@@ -584,7 +584,7 @@ def main() -> None:
                     op_name=op_name,
                     params=params,
                     np=args.np,
-                    project_name=f'icdrbench-{corpus_name}-{op_key}-process',
+                    project_name=f'cdrbench-{corpus_name}-{op_key}-process',
                 )
                 cmd = [*process_cmd_prefix, '--config', str(cfg_path)]
                 cmd_env = process_env
@@ -596,7 +596,7 @@ def main() -> None:
                     op_name=op_name,
                     params=params,
                     np=args.np,
-                    project_name=f'icdrbench-{corpus_name}-{op_key}-analyze',
+                    project_name=f'cdrbench-{corpus_name}-{op_key}-analyze',
                 )
                 cmd = [*analyze_cmd_prefix, '--config', str(cfg_path)]
                 cmd_env = analyze_env

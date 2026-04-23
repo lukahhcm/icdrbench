@@ -18,9 +18,9 @@ SRC = ROOT / 'src'
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from icdrbench.config import load_domains_config
-from icdrbench.dj_operator_loader import Fields, create_operator
-from icdrbench.domain_assignment import build_domain_execution_plan
+from cdrbench.config import load_domains_config
+from cdrbench.dj_operator_loader import Fields, create_operator
+from cdrbench.domain_assignment import build_domain_execution_plan
 
 
 FILTER_STATUS_RULES: dict[str, dict[str, Any]] = {
@@ -306,7 +306,9 @@ def _labeling_meta(record: dict[str, Any]) -> dict[str, Any]:
     meta = record.get('meta')
     if not isinstance(meta, dict):
         return {}
-    payload = meta.get('icdrbench_domain_labeling')
+    payload = meta.get('cdrbench_domain_labeling')
+    if not isinstance(payload, dict):
+        payload = meta.get('icdrbench_domain_labeling')
     return payload if isinstance(payload, dict) else {}
 
 

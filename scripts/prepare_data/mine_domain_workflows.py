@@ -18,7 +18,7 @@ SRC = ROOT / 'src'
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from icdrbench.config import load_domains_config
+from cdrbench.config import load_domains_config
 
 
 def iter_jsonl(path: Path) -> Iterable[dict[str, Any]]:

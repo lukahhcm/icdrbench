@@ -4,7 +4,7 @@
 
 This repository builds CDR-Bench data from raw JSONL corpora using a repo-local Data-Juicer checkout. The current pipeline downloads raw data, tags operator activity, mines domain workflows, materializes workflow variants, and generates deterministic references for the main, order-sensitivity, and atomic calibration sets.
 
-The code package and raw-data repository still use the legacy `icdrbench` name for compatibility.
+The repository and package are now named `cdrbench`.
 
 ## Pipeline
 
@@ -21,8 +21,8 @@ The final benchmark files are written under `data/benchmark/`.
 ## 1. Clone
 
 ```bash
-git clone https://github.com/lukahhcm/icdrbench.git
-cd icdrbench
+git clone https://github.com/lukahhcm/cdrbench.git
+cd cdrbench
 ```
 
 ## 2. Environment
@@ -55,7 +55,7 @@ Only if `./data-juicer` is unavailable do they fall back to system `dj-process` 
 ```bash
 HF_TOKEN=<your_hf_token_if_needed> \
 .venv-ops/bin/python scripts/release/download_hf_jsonl.py \
-  --repo-id lukahh/icdrbench-raw \
+  --repo-id lukahh/cdrbench-raw \
   --repo-root .
 ```
 

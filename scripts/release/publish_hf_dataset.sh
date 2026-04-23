@@ -5,7 +5,7 @@ set -euo pipefail
 #
 # Example:
 #   HF_TOKEN=hf_xxx ./scripts/release/publish_hf_dataset.sh \
-#     --repo-id yourname/icdrbench-raw
+#     --repo-id yourname/cdrbench-raw
 
 usage() {
   cat <<'EOF'
@@ -13,7 +13,7 @@ Usage:
   publish_hf_dataset.sh --repo-id <namespace/name> [--manifest <path>] [--target-subdir <name>] [--commit-message <msg>] [--delete-extra]
 
 Required:
-  --repo-id         Hugging Face dataset repo id, e.g. yourname/icdrbench-raw
+  --repo-id         Hugging Face dataset repo id, e.g. yourname/cdrbench-raw
 
 Optional:
   --manifest        File list manifest (default: configs/release_jsonl_manifest.txt)

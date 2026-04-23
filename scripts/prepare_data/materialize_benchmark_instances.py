@@ -20,8 +20,8 @@ if str(ROOT) not in sys.path:
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from icdrbench.config import load_domains_config
-from icdrbench.domain_assignment import build_domain_execution_plan
+from cdrbench.config import load_domains_config
+from cdrbench.domain_assignment import build_domain_execution_plan
 from scripts.prepare_data.materialize_domain_workflows import (
     FILTER_CALIBRATION_RULES,
     FILTER_STATUS_RULES,

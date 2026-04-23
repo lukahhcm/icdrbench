@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 
 import pandas as pd
 
-from icdrbench.dj_operator_loader import (
+from cdrbench.dj_operator_loader import (
     Fields,
     create_operator,
     get_operator_execution_mode,
