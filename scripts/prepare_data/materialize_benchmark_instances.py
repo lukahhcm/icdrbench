@@ -25,6 +25,7 @@ from cdrbench.domain_assignment import build_domain_execution_plan
 from scripts.prepare_data.materialize_domain_workflows import (
     FILTER_CALIBRATION_RULES,
     FILTER_STATUS_RULES,
+    RATIO_THRESHOLD_KEYS,
     _format_threshold_value,
     _apply_mapper_text,
     _evaluate_filter,
@@ -133,15 +134,20 @@ def _supporting_records(
     mapper_names: list[str],
     max_records: int,
     salt: str,
+    max_input_chars: int,
+    source_usage_counts: dict[str, int] | None = None,
 ) -> list[dict[str, Any]]:
     wanted = set(mapper_names)
     supported = []
     for record in records:
+        if not _within_input_char_limit(record, max_input_chars):
+            continue
         active = set(_labeling_meta(record).get('active_mapper_names', []))
         if wanted.issubset(active):
             supported.append(record)
-    supported.sort(key=lambda row: _stable_id(salt, row.get('id'), row.get('source_name'), row.get('url')))
-    return supported[:max_records]
+    supported.sort(key=lambda row: _record_sort_key(row, salt, source_usage_counts))
+    limit = _candidate_limit(max_records)
+    return supported[:limit] if limit is not None else supported
 
 
 def _record_id(record: dict[str, Any]) -> str:
@@ -150,6 +156,20 @@ def _record_id(record: dict[str, Any]) -> str:
         if value:
             return str(value)
     return _stable_id(record.get('text', ''), length=20)
+
+
+def _within_input_char_limit(record: dict[str, Any], max_input_chars: int) -> bool:
+    return max_input_chars <= 0 or len(str(record.get('text', ''))) <= max_input_chars
+
+
+def _candidate_limit(max_records: int) -> int | None:
+    return max_records if max_records > 0 else None
+
+
+def _record_sort_key(record: dict[str, Any], salt: str, source_usage_counts: dict[str, int] | None = None) -> tuple[int, str]:
+    record_id = _record_id(record)
+    usage = source_usage_counts.get(record_id, 0) if source_usage_counts is not None else 0
+    return usage, _stable_id(salt, record_id, record.get('source_name'), record.get('url'))
 
 
 def _first_filter_index(sequence: list[str], operators_by_name: dict[str, dict[str, Any]]) -> int | None:
@@ -222,6 +242,8 @@ def _calibrate_filter_params_for_target(
     base_params: dict[str, Any],
     values: list[float],
     target_drop_rate: float,
+    min_positive_ratio_threshold: float,
+    zero_ratio_threshold_policy: str,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     rule = FILTER_STATUS_RULES.get(op_name)
     calibration = FILTER_CALIBRATION_RULES.get(op_name)
@@ -232,6 +254,8 @@ def _calibrate_filter_params_for_target(
             'target_drop_rate': target_drop_rate,
             'threshold_value': None,
         }
+
+    threshold_key = rule['min_key'] if calibration['direction'] == 'min' else rule['max_key']
 
     if calibration['direction'] == 'min':
         q = target_drop_rate
@@ -246,13 +270,29 @@ def _calibrate_filter_params_for_target(
             params[rule['max_key']] = _format_threshold_value(threshold, rule['max_key'])
             params.pop(rule['min_key'], None)
 
+    threshold_value = _format_threshold_value(threshold, threshold_key)
+    zero_ratio_threshold = (
+        threshold_key in RATIO_THRESHOLD_KEYS
+        and isinstance(threshold_value, (int, float))
+        and float(threshold_value) == 0.0
+    )
+    zero_ratio_action = None
+    if zero_ratio_threshold:
+        zero_ratio_action = zero_ratio_threshold_policy
+        if zero_ratio_threshold_policy == 'min-positive':
+            threshold_value = round(max(float(min_positive_ratio_threshold), 0.0), 6)
+            params[threshold_key] = threshold_value
+
     return params, {
         'threshold_source': 'instance_balanced_quantile',
         'target_drop_rate': target_drop_rate,
         'threshold_quantile': q,
         'threshold_direction': calibration['direction'],
         'threshold_raw_value': _round_float(threshold),
-        'threshold_value': _format_threshold_value(threshold, rule['min_key' if calibration['direction'] == 'min' else 'max_key']),
+        'threshold_value': threshold_value,
+        'threshold_param_key': threshold_key,
+        'zero_ratio_threshold': zero_ratio_threshold,
+        'zero_ratio_action': zero_ratio_action,
     }
 
 
@@ -340,12 +380,36 @@ def _select_balanced(
     drop_rows: list[dict[str, Any]],
     max_instances: int,
     target_drop_rate: float,
+    salt: str,
+    source_usage_counts: dict[str, int] | None = None,
 ) -> list[dict[str, Any]]:
     target_drop = max(1, round(max_instances * target_drop_rate))
     target_keep = max_instances - target_drop
+    keep_rows = _prioritize_rows(keep_rows, salt + ':keep', source_usage_counts)
+    drop_rows = _prioritize_rows(drop_rows, salt + ':drop', source_usage_counts)
     take_drop = min(target_drop, len(drop_rows))
     take_keep = min(target_keep, len(keep_rows))
     return [*keep_rows[:take_keep], *drop_rows[:take_drop]]
+
+
+def _prioritize_rows(
+    rows: list[dict[str, Any]],
+    salt: str,
+    source_usage_counts: dict[str, int] | None = None,
+) -> list[dict[str, Any]]:
+    def key(row: dict[str, Any]) -> tuple[int, str]:
+        source_id = str(row.get('source_record_id') or row.get('instance_id') or '')
+        usage = source_usage_counts.get(source_id, 0) if source_usage_counts is not None else 0
+        return usage, _stable_id(salt, source_id, row.get('instance_id'))
+
+    return sorted(rows, key=key)
+
+
+def _mark_source_usage(rows: Iterable[dict[str, Any]], source_usage_counts: dict[str, int]) -> None:
+    for row in rows:
+        source_id = row.get('source_record_id')
+        if source_id:
+            source_usage_counts[str(source_id)] += 1
 
 
 def _load_domain_workflows(workflow_library_dir: Path) -> dict[str, dict[str, Any]]:
@@ -363,14 +427,19 @@ def _active_records_for_mapper(
     mapper_name: str,
     max_records: int,
     salt: str,
+    max_input_chars: int,
+    source_usage_counts: dict[str, int] | None = None,
 ) -> list[dict[str, Any]]:
     active_records = []
     for record in records:
+        if not _within_input_char_limit(record, max_input_chars):
+            continue
         active = set(_labeling_meta(record).get('active_mapper_names', []))
         if mapper_name in active:
             active_records.append(record)
-    active_records.sort(key=lambda row: _stable_id(salt, row.get('id'), row.get('source_name'), row.get('url')))
-    return active_records[:max_records]
+    active_records.sort(key=lambda row: _record_sort_key(row, salt, source_usage_counts))
+    limit = _candidate_limit(max_records)
+    return active_records[:limit] if limit is not None else active_records
 
 
 def _atomic_record(
@@ -407,8 +476,16 @@ def _materialize_atomic_mapper(
     records: list[dict[str, Any]],
     operators_by_name: dict[str, dict[str, Any]],
     args: argparse.Namespace,
+    source_usage_counts: dict[str, int],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    candidates = _active_records_for_mapper(records, op_name, args.max_atomic_candidate_records, f'atomic:{op_name}')
+    candidates = _active_records_for_mapper(
+        records,
+        op_name,
+        args.max_atomic_candidate_records,
+        f'atomic:{op_name}',
+        args.max_input_chars,
+        source_usage_counts,
+    )
     rows = []
     for record in candidates:
         try:
@@ -447,11 +524,15 @@ def _materialize_atomic_filter(
     records: list[dict[str, Any]],
     operators_by_name: dict[str, dict[str, Any]],
     args: argparse.Namespace,
+    source_usage_counts: dict[str, int],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     candidates = sorted(
-        records,
-        key=lambda row: _stable_id(f'atomic:{op_name}', row.get('id'), row.get('source_name'), row.get('url')),
-    )[: args.max_atomic_candidate_records]
+        [record for record in records if _within_input_char_limit(record, args.max_input_chars)],
+        key=lambda row: _record_sort_key(row, f'atomic:{op_name}', source_usage_counts),
+    )
+    limit = _candidate_limit(args.max_atomic_candidate_records)
+    if limit is not None:
+        candidates = candidates[:limit]
     base_params = _base_params(op_name, operators_by_name)
     values = []
     value_key = None
@@ -471,6 +552,8 @@ def _materialize_atomic_filter(
         base_params,
         values,
         args.target_drop_rate,
+        args.min_positive_ratio_threshold,
+        args.zero_ratio_threshold_policy,
     )
     threshold_meta = {
         **threshold_meta,
@@ -479,6 +562,22 @@ def _materialize_atomic_filter(
         'value_count': len(values),
         'atomic_filter': True,
     }
+    if threshold_meta.get('zero_ratio_threshold') and args.zero_ratio_threshold_policy == 'skip':
+        return [], {
+            'operator': op_name,
+            'operator_kind': 'filter',
+            'status': 'skipped_zero_ratio_threshold',
+            'candidate_count': len(candidates),
+            'value_count': len(values),
+            'keep_count': 0,
+            'drop_count': 0,
+            'selected_count': 0,
+            'selected_keep_count': 0,
+            'selected_drop_count': 0,
+            'source_domain_counts': {},
+            'threshold_meta': threshold_meta,
+            'filter_params': calibrated_params,
+        }
     params_by_name = {op_name: calibrated_params}
     keep_rows = []
     drop_rows = []
@@ -500,7 +599,14 @@ def _materialize_atomic_filter(
         else:
             drop_rows.append(row)
 
-    selected = _select_balanced(keep_rows, drop_rows, args.max_atomic_instances_per_op, args.target_drop_rate)
+    selected = _select_balanced(
+        keep_rows,
+        drop_rows,
+        args.max_atomic_instances_per_op,
+        args.target_drop_rate,
+        f'atomic:{op_name}:select',
+        source_usage_counts,
+    )
     has_min_balance = len(keep_rows) >= args.min_atomic_keep and len(drop_rows) >= args.min_atomic_drop
     selected_rows = selected if has_min_balance else []
     source_domain_counts = (
@@ -530,6 +636,7 @@ def _materialize_atomic_ops(
     plan: dict[str, Any],
     operators_by_name: dict[str, dict[str, Any]],
     args: argparse.Namespace,
+    source_usage_counts: dict[str, int],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     rows: list[dict[str, Any]] = []
     summary_rows: list[dict[str, Any]] = []
@@ -543,14 +650,16 @@ def _materialize_atomic_ops(
     _log(f'atomic global: {len(mapper_names)} unique mappers, {len(filter_names)} unique filters, {len(all_records)} records')
 
     for op_name in mapper_names:
-        op_rows, summary = _materialize_atomic_mapper(op_name, all_records, operators_by_name, args)
+        op_rows, summary = _materialize_atomic_mapper(op_name, all_records, operators_by_name, args, source_usage_counts)
         rows.extend(op_rows)
+        _mark_source_usage(op_rows, source_usage_counts)
         summary_rows.append(summary)
         _log(f"  atomic mapper {op_name}: {summary['status']} selected={summary['selected_count']}")
 
     for op_name in filter_names:
-        op_rows, summary = _materialize_atomic_filter(op_name, all_records, operators_by_name, args)
+        op_rows, summary = _materialize_atomic_filter(op_name, all_records, operators_by_name, args, source_usage_counts)
         rows.extend(op_rows)
+        _mark_source_usage(op_rows, source_usage_counts)
         summary_rows.append(summary)
         _log(
             f"  atomic filter {op_name}: {summary['status']} "
@@ -568,10 +677,18 @@ def _materialize_main_variant(
     records: list[dict[str, Any]],
     operators_by_name: dict[str, dict[str, Any]],
     args: argparse.Namespace,
+    source_usage_counts: dict[str, int],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     sequence = list(variant['operator_sequence'])
     mapper_names = _mapper_names(sequence, operators_by_name)
-    candidates = _supporting_records(records, mapper_names, args.max_candidate_records, variant['workflow_variant_id'])
+    candidates = _supporting_records(
+        records,
+        mapper_names,
+        args.max_candidate_records,
+        variant['workflow_variant_id'],
+        args.max_input_chars,
+        source_usage_counts,
+    )
     base = {
         'benchmark_track': 'main',
         'domain': domain,
@@ -624,6 +741,8 @@ def _materialize_main_variant(
         base_filter_params,
         values,
         args.target_drop_rate,
+        args.min_positive_ratio_threshold,
+        args.zero_ratio_threshold_policy,
     )
     threshold_meta = {
         **threshold_meta,
@@ -631,6 +750,21 @@ def _materialize_main_variant(
         'status_value_key': value_key,
         'value_count': len(values),
     }
+    if threshold_meta.get('zero_ratio_threshold') and args.zero_ratio_threshold_policy == 'skip':
+        return [], {
+            **base,
+            'status': 'skipped_zero_ratio_threshold',
+            'candidate_count': len(candidates),
+            'value_count': len(values),
+            'keep_count': 0,
+            'drop_count': 0,
+            'selected_keep_count': 0,
+            'selected_drop_count': 0,
+            'selected_count': 0,
+            'filter_name': filter_name,
+            'threshold_meta': threshold_meta,
+            'filter_params': calibrated_params,
+        }
     filter_params_by_name = {filter_name: calibrated_params}
     keep_rows = []
     drop_rows = []
@@ -645,7 +779,14 @@ def _materialize_main_variant(
         else:
             drop_rows.append(row)
 
-    selected = _select_balanced(keep_rows, drop_rows, args.max_instances_per_variant, args.target_drop_rate)
+    selected = _select_balanced(
+        keep_rows,
+        drop_rows,
+        args.max_instances_per_variant,
+        args.target_drop_rate,
+        f"{variant['workflow_variant_id']}:select",
+        source_usage_counts,
+    )
     has_min_balance = len(keep_rows) >= args.min_keep and len(drop_rows) >= args.min_drop
     selected_rows = selected if has_min_balance else []
     return selected if has_min_balance else [], {
@@ -671,6 +812,7 @@ def _materialize_order_family(
     records: list[dict[str, Any]],
     operators_by_name: dict[str, dict[str, Any]],
     args: argparse.Namespace,
+    source_usage_counts: dict[str, int],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     variants = list(family.get('variants') or [])
     variants_by_slot = {variant['order_slot']: variant for variant in variants}
@@ -685,7 +827,14 @@ def _materialize_order_family(
         }
 
     mapper_names = _mapper_names(variants_by_slot['end']['operator_sequence'], operators_by_name)
-    candidates = _supporting_records(records, mapper_names, args.max_candidate_records, family['order_family_id'])
+    candidates = _supporting_records(
+        records,
+        mapper_names,
+        args.max_candidate_records,
+        family['order_family_id'],
+        args.max_input_chars,
+        source_usage_counts,
+    )
     filter_name = family['filter_name']
     base_params = dict(variants_by_slot['front'].get('filter_params') or _base_params(filter_name, operators_by_name))
     values = []
@@ -714,6 +863,8 @@ def _materialize_order_family(
         base_params,
         values,
         args.target_drop_rate,
+        args.min_positive_ratio_threshold,
+        args.zero_ratio_threshold_policy,
     )
     threshold_meta = {
         **threshold_meta,
@@ -722,6 +873,23 @@ def _materialize_order_family(
         'value_count': len(values),
         'shared_across_order_slots': True,
     }
+    if threshold_meta.get('zero_ratio_threshold') and args.zero_ratio_threshold_policy == 'skip':
+        return [], {
+            'domain': domain,
+            'workflow_id': workflow['workflow_id'],
+            'order_family_id': family.get('order_family_id'),
+            'filter_name': filter_name,
+            'status': 'skipped_zero_ratio_threshold',
+            'candidate_count': len(candidates),
+            'usable_record_count': len(usable_records),
+            'value_count': len(values),
+            'selected_group_count': 0,
+            'selected_variant_count': 0,
+            'keep_count': 0,
+            'drop_count': 0,
+            'threshold_meta': threshold_meta,
+            'filter_params': calibrated_params,
+        }
     filter_params_by_name = {filter_name: calibrated_params}
     selected_rows = []
     sensitive_group_count = 0
@@ -783,22 +951,40 @@ def main() -> None:
     parser.add_argument('--workflow-library-dir', default='data/processed/workflow_library')
     parser.add_argument('--filtered-path', default='data/processed/domain_filtered/all.jsonl')
     parser.add_argument('--output-dir', default='data/benchmark')
-    parser.add_argument('--max-candidate-records', type=int, default=512)
+    parser.add_argument('--max-candidate-records', type=int, default=0, help='Candidate cap per workflow/order family; 0 means no cap.')
     parser.add_argument('--max-instances-per-variant', type=int, default=20)
     parser.add_argument('--max-order-groups-per-family', type=int, default=10)
     parser.add_argument('--min-keep', type=int, default=5)
     parser.add_argument('--min-drop', type=int, default=5)
     parser.add_argument('--min-order-sensitive-groups', type=int, default=5)
     parser.add_argument('--target-drop-rate', type=float, default=0.5)
-    parser.add_argument('--max-atomic-candidate-records', type=int, default=256)
+    parser.add_argument('--max-atomic-candidate-records', type=int, default=0, help='Candidate cap per atomic operator; 0 means no cap.')
     parser.add_argument('--max-atomic-instances-per-op', type=int, default=20)
     parser.add_argument('--min-atomic-keep', type=int, default=5)
     parser.add_argument('--min-atomic-drop', type=int, default=5)
     parser.add_argument('--skip-atomic', action='store_true', help='Only materialize main/order instances.')
     parser.add_argument(
+        '--max-input-chars',
+        type=int,
+        default=80_000,
+        help='Skip raw inputs longer than this many characters before materialization; 0 disables the limit.',
+    )
+    parser.add_argument(
+        '--min-positive-ratio-threshold',
+        type=float,
+        default=0.001,
+        help='Use this threshold when a calibrated ratio threshold rounds to 0 and the zero-ratio policy is min-positive.',
+    )
+    parser.add_argument(
+        '--zero-ratio-threshold-policy',
+        choices=('min-positive', 'skip'),
+        default='min-positive',
+        help='Handle calibrated ratio thresholds equal to 0 by trying a small positive threshold or skipping the variant.',
+    )
+    parser.add_argument(
         '--resume',
         action='store_true',
-        help='Reuse per-variant cache shards in output-dir/_materialize_cache after an interrupted run.',
+        help='Reuse per-variant cache shards in output-dir/_materialize_cache_v2 after an interrupted run.',
     )
     args = parser.parse_args()
 
@@ -806,7 +992,7 @@ def main() -> None:
     workflow_library_dir = (root / args.workflow_library_dir).resolve()
     filtered_path = (root / args.filtered_path).resolve()
     output_dir = (root / args.output_dir).resolve()
-    cache_dir = output_dir / '_materialize_cache'
+    cache_dir = output_dir / '_materialize_cache_v2'
 
     if not workflow_library_dir.exists():
         raise SystemExit(f'workflow library dir not found: {workflow_library_dir}')
@@ -814,6 +1000,12 @@ def main() -> None:
         raise SystemExit(f'filtered corpus not found: {filtered_path}')
     if not 0.0 < args.target_drop_rate < 1.0:
         raise SystemExit('--target-drop-rate must be in (0, 1)')
+    if args.max_input_chars < 0:
+        raise SystemExit('--max-input-chars must be >= 0')
+    if args.max_candidate_records < 0 or args.max_atomic_candidate_records < 0:
+        raise SystemExit('candidate caps must be >= 0; use 0 for no cap')
+    if args.min_positive_ratio_threshold < 0:
+        raise SystemExit('--min-positive-ratio-threshold must be >= 0')
     output_dir.mkdir(parents=True, exist_ok=True)
     if cache_dir.exists() and not args.resume:
         shutil.rmtree(cache_dir)
@@ -842,14 +1034,22 @@ def main() -> None:
     main_summary_rows: list[dict[str, Any]] = []
     order_summary_rows: list[dict[str, Any]] = []
     atomic_summary_rows: list[dict[str, Any]] = []
+    source_usage_counts: dict[str, int] = defaultdict(int)
 
     if not args.skip_atomic:
         cached = _load_cache(cache_dir, 'atomic', 'atomic_ops') if args.resume else None
         if cached is not None:
             atomic_rows, atomic_summary_rows = cached
+            _mark_source_usage(atomic_rows, source_usage_counts)
             _log(f'atomic global: cached selected={len(atomic_rows)} summaries={len(atomic_summary_rows)}')
         else:
-            atomic_rows, atomic_summary_rows = _materialize_atomic_ops(records_by_domain, plan, operators_by_name, args)
+            atomic_rows, atomic_summary_rows = _materialize_atomic_ops(
+                records_by_domain,
+                plan,
+                operators_by_name,
+                args,
+                source_usage_counts,
+            )
             _write_cache(cache_dir, 'atomic', 'atomic_ops', atomic_rows, atomic_summary_rows)
 
     for domain_index, (domain, domain_yaml) in enumerate(sorted(domain_workflows.items()), start=1):
@@ -869,9 +1069,19 @@ def main() -> None:
                 cached = _load_cache(cache_dir, 'main', variant_id) if args.resume else None
                 if cached is not None:
                     rows, summary = cached
+                    _mark_source_usage(rows, source_usage_counts)
                 else:
-                    rows, summary = _materialize_main_variant(domain, workflow, variant, records, operators_by_name, args)
+                    rows, summary = _materialize_main_variant(
+                        domain,
+                        workflow,
+                        variant,
+                        records,
+                        operators_by_name,
+                        args,
+                        source_usage_counts,
+                    )
                     _write_cache(cache_dir, 'main', variant_id, rows, summary)
+                    _mark_source_usage(rows, source_usage_counts)
                 main_rows.extend(rows)
                 main_summary_rows.append(summary)
                 _log(
@@ -884,9 +1094,19 @@ def main() -> None:
                 cached = _load_cache(cache_dir, 'order_sensitivity', family_id) if args.resume else None
                 if cached is not None:
                     rows, summary = cached
+                    _mark_source_usage(rows, source_usage_counts)
                 else:
-                    rows, summary = _materialize_order_family(domain, workflow, family, records, operators_by_name, args)
+                    rows, summary = _materialize_order_family(
+                        domain,
+                        workflow,
+                        family,
+                        records,
+                        operators_by_name,
+                        args,
+                        source_usage_counts,
+                    )
                     _write_cache(cache_dir, 'order_sensitivity', family_id, rows, summary)
+                    _mark_source_usage(rows, source_usage_counts)
                 order_rows.extend(rows)
                 order_summary_rows.append(summary)
                 _log(

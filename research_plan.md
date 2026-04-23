@@ -185,8 +185,10 @@ Filter thresholds should not blindly use Data-Juicer defaults. The pipeline firs
 Main-track filter variants:
 
 - target balanced `KEEP` / `DROP`
-- choose thresholds from candidate statistic distributions
+- choose thresholds from eligible candidate statistic distributions
 - skip variants that cannot satisfy minimum keep/drop counts
+- prefer source-record diversity when selecting final rows, so different workflows do not repeatedly use the same few examples
+- cap or disable raw input length before materialization to match the intended LLM prompt budget
 
 Order-sensitivity variants:
 
@@ -199,6 +201,7 @@ Human-facing threshold values are rounded:
 - length/count thresholds use coarse readable values such as 5, 10, 50, 100, 1000
 - ordinary ratios use a 0.01 grid
 - very small ratios may keep finer grids such as 0.001 or 0.0001
+- calibrated ratio thresholds equal to 0 are treated as degenerate; the default materialization policy first tries a small positive threshold such as 0.001, and the variant is skipped if it cannot maintain enough keep/drop examples
 
 ## 8. Prompting Plan
 

@@ -182,7 +182,10 @@ column -s, -t < data/processed/workflow_library/web/checkpoint_filter_stats.csv 
   --filtered-path data/processed/domain_filtered/all.jsonl \
   --output-dir data/benchmark \
   --target-drop-rate 0.5 \
-  --max-candidate-records 2000 \
+  --max-candidate-records 0 \
+  --max-input-chars 80000 \
+  --min-positive-ratio-threshold 0.001 \
+  --zero-ratio-threshold-policy min-positive \
   --max-instances-per-variant 50 \
   --max-order-groups-per-family 30 \
   --max-atomic-candidate-records 1000 \
@@ -215,7 +218,9 @@ Target scale:
 Important parameters:
 
 - `--target-drop-rate 0.5`: calibrate filter tasks toward 50% `KEEP` and 50% `DROP`
-- `--max-candidate-records 2000`: scan at most 2000 candidate samples per workflow variant or order family
+- `--max-candidate-records 0`: scan all eligible candidate samples per workflow variant or order family; set a positive number such as `2000` for a faster capped run
+- `--max-input-chars 80000`: skip raw inputs above 80k characters before GT materialization, keeping tasks within a practical prompt budget; use `0` to disable
+- `--min-positive-ratio-threshold 0.001`: when a calibrated ratio threshold is exactly `0`, first try a small positive threshold instead of creating an unnatural zero-ratio task
 - `--max-instances-per-variant 50`: cap main-track instances per workflow variant
 - `--max-order-groups-per-family 30`: cap order groups per order family
 - `--max-atomic-candidate-records 1000`: scan at most 1000 candidates per atomic operator
@@ -223,9 +228,10 @@ Important parameters:
 - `--min-keep / --min-drop`: skip main filter variants without enough keep/drop candidates
 - `--min-order-sensitive-groups`: skip order families without enough genuinely order-sensitive groups
 - `--min-atomic-keep / --min-atomic-drop`: skip atomic filters without enough keep/drop candidates
-- `--resume`: reuse per-variant cache shards in `data/benchmark/_materialize_cache/` after an interrupted run
+- `--zero-ratio-threshold-policy min-positive`: use `0.001` for degenerate calibrated ratio thresholds and let normal keep/drop balance checks decide whether to keep the variant; use `skip` to drop such variants immediately
+- `--resume`: reuse per-variant cache shards in `data/benchmark/_materialize_cache_v2/` after an interrupted run
 
-Thresholds are recalibrated during materialization. Length/count thresholds are rounded to human-readable values such as 5, 10, 50, 100, and 1000. Ratios usually use a 0.01 grid, while very small ratios may keep finer 0.001 or 0.0001 grids.
+Thresholds are recalibrated during materialization. Length/count thresholds are rounded to human-readable values such as 5, 10, 50, 100, and 1000. Ratios usually use a 0.01 grid, while very small ratios may keep finer 0.001 or 0.0001 grids. Final row selection is best-effort diversity-aware: rows from source records that have already been selected by earlier workflows are deprioritized.
 
 ## 8. How to Read the Outputs
 
