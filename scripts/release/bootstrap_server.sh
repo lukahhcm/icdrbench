@@ -99,12 +99,12 @@ uv venv .venv-ops --python 3.11
 uv pip install --python .venv-ops/bin/python -e .
 uv pip install --python .venv-ops/bin/python -U huggingface_hub py-data-juicer
 
-.venv-ops/bin/python scripts/release/download_hf_jsonl.py \
+PYTHONPATH=src .venv-ops/bin/python -m cdrbench.release.download_hf_jsonl \
   --repo-id "$HF_DATASET" \
   --repo-root "$PROJECT_DIR"
 
 if [[ "$RUN_PROBE" == "true" ]]; then
-  PYTHONPATH=src .venv-ops/bin/python scripts/prepare_data/run_dj_per_op_probe.py \
+  PYTHONPATH=src .venv-ops/bin/python -m cdrbench.prepare_data.run_dj_per_op_probe \
     --execute \
     --resume \
     --np 2 \
@@ -116,5 +116,5 @@ fi
 echo "Server bootstrap complete."
 echo "Project dir: $PROJECT_DIR"
 echo "Now you can run, for example:"
-echo "  PYTHONPATH=src .venv-ops/bin/python scripts/prepare_data/tag_and_assign_domains.py --resume"
-echo "  PYTHONPATH=src .venv-ops/bin/python scripts/prepare_data/run_dj_per_op_probe.py --execute --resume --summary-csv data/processed/dj_per_op_probe/summary_full.csv"
+echo "  PYTHONPATH=src .venv-ops/bin/python -m cdrbench.prepare_data.tag_and_assign_domains --resume"
+echo "  PYTHONPATH=src .venv-ops/bin/python -m cdrbench.prepare_data.run_dj_per_op_probe --execute --resume --summary-csv data/processed/dj_per_op_probe/summary_full.csv"

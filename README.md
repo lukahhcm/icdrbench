@@ -54,7 +54,7 @@ Only if `./data-juicer` is unavailable do they fall back to system `dj-process` 
 
 ```bash
 HF_TOKEN=<your_hf_token_if_needed> \
-.venv-ops/bin/python scripts/release/download_hf_jsonl.py \
+PYTHONPATH=src .venv-ops/bin/python -m cdrbench.release.download_hf_jsonl \
   --repo-id lukahh/cdrbench-raw \
   --repo-root .
 ```
@@ -66,19 +66,19 @@ The manifest downloads JSONL files into `data/raw/`, including arXiv, Common Cra
 Small smoke test:
 
 ```bash
-.venv-ops/bin/python scripts/prepare_data/tag_and_assign_domains.py --max-records 200
+PYTHONPATH=src .venv-ops/bin/python -m cdrbench.prepare_data.tag_and_assign_domains --max-records 200
 ```
 
 Full resumable run:
 
 ```bash
-.venv-ops/bin/python scripts/prepare_data/tag_and_assign_domains.py --resume
+PYTHONPATH=src .venv-ops/bin/python -m cdrbench.prepare_data.tag_and_assign_domains --resume
 ```
 
 Useful overrides:
 
 ```bash
-.venv-ops/bin/python scripts/prepare_data/tag_and_assign_domains.py \
+PYTHONPATH=src .venv-ops/bin/python -m cdrbench.prepare_data.tag_and_assign_domains \
   --dj-repo-root /path/to/data-juicer \
   --dj-python /usr/bin/python3 \
   --resume
@@ -104,7 +104,7 @@ Notes:
 ## 5. Mine Workflow Candidates
 
 ```bash
-.venv-ops/bin/python scripts/prepare_data/mine_domain_workflows.py \
+PYTHONPATH=src .venv-ops/bin/python -m cdrbench.prepare_data.mine_domain_workflows \
   --tagged-dir data/processed/domain_tags \
   --output-dir data/processed/workflow_mining
 ```
@@ -131,7 +131,7 @@ Fallback workflow candidates are kept for inspection but excluded from benchmark
 ## 6. Materialize Workflow Libraries
 
 ```bash
-.venv-ops/bin/python scripts/prepare_data/materialize_domain_workflows.py \
+PYTHONPATH=src .venv-ops/bin/python -m cdrbench.prepare_data.materialize_domain_workflows \
   --workflow-mining-dir data/processed/workflow_mining \
   --filtered-path data/processed/domain_filtered/all.jsonl \
   --output-dir data/processed/workflow_library \
@@ -177,7 +177,7 @@ column -s, -t < data/processed/workflow_library/web/checkpoint_filter_stats.csv 
 ## 7. Generate Benchmark Instances and GT
 
 ```bash
-.venv-ops/bin/python scripts/prepare_data/materialize_benchmark_instances.py \
+PYTHONPATH=src .venv-ops/bin/python -m cdrbench.prepare_data.materialize_benchmark_instances \
   --workflow-library-dir data/processed/workflow_library \
   --filtered-path data/processed/domain_filtered/all.jsonl \
   --output-dir data/benchmark \
@@ -260,7 +260,7 @@ Benchmark composition visualization:
 If you want a quick paper-style overview of what the benchmark is made of, generate the composition plots:
 
 ```bash
-.venv-ops/bin/python scripts/prepare_data/plot_benchmark_composition.py \
+PYTHONPATH=src .venv-ops/bin/python -m cdrbench.reporting.plot_benchmark_composition \
   --benchmark-dir data/benchmark \
   --workflow-library-dir data/processed/workflow_library \
   --output-dir data/paper_stats/plots
@@ -287,51 +287,111 @@ The overview figure shows:
 
 Prompt generation is intentionally separate from GT construction, so prompt wording can be revised without rerunning Data-Juicer references.
 
-Atomic preview first:
+The prompt pipeline now has two stages:
+
+1. Build a workflow-level prompt library:
+   Generate multiple prompt candidates for each style, judge them immediately, and keep only the accepted prompts in the workflow pool.
+2. Build eval-ready prompt tracks:
+   For each benchmark sample, deterministically sample `3` distinct styles from the accepted workflow pool.
+
+Atomic preview first, using the merged generate+judge stage:
 
 ```bash
-.venv-ops/bin/python scripts/prepare_data/generate_benchmark_prompts.py \
+PYTHONPATH=src .venv-ops/bin/python -m cdrbench.prompting.generate_workflow_prompt_library \
   --benchmark-dir data/benchmark \
   --output-dir data/benchmark_prompts_atomic_preview \
   --prompt-config configs/workflow_prompting.yaml \
   --prompt-source llm \
   --tracks atomic_ops \
-  --variants-per-workflow 3 \
-  --cache-path data/benchmark_prompts_atomic_preview/llm_prompt_cache.jsonl \
+  --variants-per-workflow 11 \
+  --candidates-per-style 3 \
+  --cache-path data/benchmark_prompts_atomic_preview/workflow_prompt_library_cache.jsonl \
   --resume
+```
+
+Then build the eval-ready atomic prompt track from the accepted pool:
+
+```bash
+PYTHONPATH=src .venv-ops/bin/python -m cdrbench.prompting.build_eval_prompt_tracks \
+  --benchmark-dir data/benchmark \
+  --prompt-library data/benchmark_prompts_atomic_preview/workflow_prompt_library.jsonl \
+  --output-dir data/benchmark_prompts_atomic_preview/eval \
+  --tracks atomic_ops \
+  --prompt-variants-per-sample 3 \
+  --prompt-sampling-seed 0 \
+  --min-prompt-variants-per-sample 3
 ```
 
 If the atomic prompts look good, continue with the main and order-sensitivity tracks:
 
 ```bash
-.venv-ops/bin/python scripts/prepare_data/generate_benchmark_prompts.py \
+PYTHONPATH=src .venv-ops/bin/python -m cdrbench.prompting.generate_workflow_prompt_library \
   --benchmark-dir data/benchmark \
   --output-dir data/benchmark_prompts \
   --prompt-config configs/workflow_prompting.yaml \
   --prompt-source llm \
   --tracks main order_sensitivity \
-  --variants-per-workflow 6 \
-  --cache-path data/benchmark_prompts/llm_prompt_cache.jsonl \
+  --variants-per-workflow 11 \
+  --candidates-per-style 3 \
+  --cache-path data/benchmark_prompts/workflow_prompt_library_cache.jsonl \
   --resume
+```
+
+```bash
+PYTHONPATH=src .venv-ops/bin/python -m cdrbench.prompting.build_eval_prompt_tracks \
+  --benchmark-dir data/benchmark \
+  --prompt-library data/benchmark_prompts/workflow_prompt_library.jsonl \
+  --output-dir data/benchmark_prompts/eval \
+  --tracks main order_sensitivity \
+  --prompt-variants-per-sample 3 \
+  --prompt-sampling-seed 0 \
+  --min-prompt-variants-per-sample 3
 ```
 
 Outputs:
 
-- `data/benchmark_prompts/main.jsonl`
-- `data/benchmark_prompts/order_sensitivity.jsonl`
-- `data/benchmark_prompts/atomic_ops.jsonl`
 - `data/benchmark_prompts/workflow_prompt_library.jsonl`
 - `data/benchmark_prompts/prompt_generation_summary.jsonl`
+- `data/benchmark_prompts/eval/main.jsonl`
+- `data/benchmark_prompts/eval/order_sensitivity.jsonl`
+- `data/benchmark_prompts/eval/atomic_ops.jsonl`
+- `data/benchmark_prompts/eval/prompt_eval_build_summary.jsonl`
 
-Track files keep the original benchmark rows and attach:
+`workflow_prompt_library.jsonl` stores the accepted workflow-level prompt pool. Each row corresponds to one unique workflow signature and includes:
 
 - `workflow_prompt_key`
-- `prompt_candidate_count`
+- `benchmark_track`
+- `domain`
+- `workflow_type`
+- `order_slot`
+- `operator_sequence`
+- `filter_params_by_name`
+- `threshold_meta`
+- `requested_style_count`
+- `candidates_per_style`
+- `generated_candidate_count`
+- `accepted_candidate_count`
+- `accepted_style_count`
+- `candidates`
+
+Track files are eval-ready sample files. They keep only the benchmark fields needed for evaluation plus:
+
+- `workflow_prompt_key`
+- `prompt_candidate_pool_count`
+- `prompt_variant_count`
+- `prompt_sampling_policy`
+- `prompt_sampling_seed`
 - `prompt_variants`
 
-`workflow_prompt_library.jsonl` stores prompt requirement candidates for each unique workflow. The generator reads operator source code, operator docs, workflow order, and filter params, then asks an external LLM to produce multiple stylistically diverse user-facing requirements for the same workflow.
+Each `prompt_variants` entry is lightweight and contains only:
 
-The actual model prompt is assembled by code:
+- `style_id`
+- `style_label`
+- `user_requirement`
+
+This means the workflow library keeps only judge-passed prompts, while each benchmark sample keeps a fixed deterministic subset of `3` styles for direct evaluation.
+
+The actual model prompt should be assembled by evaluation code:
 
 ```text
 {{LLM-generated user requirement}}
@@ -365,41 +425,15 @@ By default, prompt generation skips workflows containing `flagged_words_filter` 
 
 Notes:
 
-- Prompt generation is grouped by workflow signature rather than by individual sample, so all samples sharing the same workflow reuse the same prompt-style candidates.
-- `--variants-per-workflow` controls how many prompt styles to keep for each workflow.
-- `--resume` reuses the workflow-level cache at `--cache-path`, so an interrupted run can continue without re-calling the LLM for finished workflows.
-
-Then run the LLM judge:
-
-```bash
-.venv-ops/bin/python scripts/prepare_data/judge_benchmark_prompts.py \
-  --prompt-library data/benchmark_prompts/workflow_prompt_library.jsonl \
-  --output-dir data/benchmark_prompts/judged
-```
-
-Judge outputs:
-
-- `data/benchmark_prompts/judged/workflow_prompt_library.judged.jsonl`
-- `data/benchmark_prompts/judged/workflow_prompt_library.accepted.jsonl`
-
-The judge checks:
-
-- workflow functional equivalence
-- correct operation order
-- correct JSON output contract
-- absence of operator/code leakage
-- user naturalness
-- threshold grounding
+- Prompt generation is grouped by workflow signature rather than by individual sample, so all samples sharing the same workflow reuse the same accepted prompt pool.
+- `--variants-per-workflow` controls how many style presets to request for each workflow.
+- `--candidates-per-style` controls how many prompt candidates to generate for each style before judging.
+- `generate_workflow_prompt_library.py` runs generation and judging in one pass, and stores only the accepted prompts in `workflow_prompt_library.jsonl`.
+- `build_eval_prompt_tracks.py` deterministically samples distinct styles from the accepted workflow pool for each benchmark sample.
+- `--prompt-sampling-seed` fixes the deterministic sample of styles used for each benchmark sample, so repeated evaluations stay reproducible.
+- `--min-prompt-variants-per-sample 3` ensures the final eval tracks only keep samples whose workflow prompt pool can supply at least `3` distinct accepted styles.
+- `--resume` reuses the workflow-level cache at `--cache-path`, so an interrupted workflow-library run can continue without re-calling the LLM for finished workflows.
 - clarity and format consistency
-
-For debugging only, you can append hidden operator names to each step:
-
-```bash
-.venv-ops/bin/python scripts/prepare_data/generate_benchmark_prompts.py \
-  --prompt-source template
-```
-
-Do not use template fallback for headline model evaluation.
 
 ## 10. Troubleshooting Data-Juicer Imports
 
@@ -411,7 +445,7 @@ If tagging fails with errors such as:
 Run:
 
 ```bash
-python scripts/debug/debug_data_juicer_env.py
+PYTHONPATH=src python -m cdrbench.debug_tools.debug_data_juicer_env
 ```
 
 This checks:

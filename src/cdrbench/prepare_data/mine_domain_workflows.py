@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from collections import Counter, defaultdict
 from itertools import combinations
 from math import ceil
@@ -13,10 +12,7 @@ from typing import Any, Iterable
 import pandas as pd
 import yaml
 
-ROOT = Path(__file__).resolve().parents[2]
-SRC = ROOT / 'src'
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
+ROOT = Path(__file__).resolve().parents[3]
 
 from cdrbench.config import load_domains_config
 

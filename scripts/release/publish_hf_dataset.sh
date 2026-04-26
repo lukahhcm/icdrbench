@@ -97,4 +97,5 @@ if [[ "$DELETE_EXTRA" == "true" ]]; then
   PY_ARGS+=(--delete-extra)
 fi
 
-"$PYTHON_BIN" "$SCRIPT_DIR/publish_hf_jsonl.py" "${PY_ARGS[@]}"
+PYTHONPATH="$REPO_ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
+  "$PYTHON_BIN" -m cdrbench.release.publish_hf_jsonl "${PY_ARGS[@]}"

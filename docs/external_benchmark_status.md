@@ -13,8 +13,8 @@ Integrated source directories:
 Converted with:
 
 ```bash
-PYTHONPATH=src python3 scripts/prepare_data/convert_raw_corpus.py pii_docpii
-PYTHONPATH=src python3 scripts/prepare_data/convert_raw_corpus.py pii_synthetic
+PYTHONPATH=src python3 -m cdrbench.prepare_data.convert_raw_corpus pii_docpii
+PYTHONPATH=src python3 -m cdrbench.prepare_data.convert_raw_corpus pii_synthetic
 ```
 
 Output raw corpora:

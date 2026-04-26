@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import sys
 from collections import defaultdict
 from pathlib import Path
 from statistics import mean
@@ -13,10 +12,7 @@ from typing import Any, Iterable
 import pandas as pd
 import yaml
 
-ROOT = Path(__file__).resolve().parents[2]
-SRC = ROOT / 'src'
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
+ROOT = Path(__file__).resolve().parents[3]
 
 from cdrbench.config import load_domains_config
 from cdrbench.dj_operator_loader import Fields, create_operator

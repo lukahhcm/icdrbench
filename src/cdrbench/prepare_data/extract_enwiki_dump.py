@@ -112,7 +112,7 @@ def main() -> None:
     parser.add_argument('--domain', default='enwiki', help='Domain field to emit in output records')
     args = parser.parse_args()
 
-    root = Path(__file__).resolve().parents[2]
+    root = Path(__file__).resolve().parents[3]
     out_dir = root / args.out_dir
 
     for raw_input in args.inputs:

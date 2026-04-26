@@ -22,7 +22,7 @@ ARXIV_MAIN_NAMES = {'main.tex', 'paper.tex', 'ms.tex', 'manuscript.tex', 'articl
 
 
 def repo_root() -> Path:
-    return Path(__file__).resolve().parents[2]
+    return Path(__file__).resolve().parents[3]
 
 
 def resolve_path(root: Path, raw_path: str) -> Path:

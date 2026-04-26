@@ -136,7 +136,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    root = Path(__file__).resolve().parents[2]
+    root = Path(__file__).resolve().parents[3]
     domains_cfg_path = root / args.domains_config
     config_dir = root / args.config_dir
     output_dir = root / args.output_dir

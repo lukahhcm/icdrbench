@@ -5,7 +5,6 @@ import argparse
 import hashlib
 import json
 import shutil
-import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable
@@ -13,16 +12,11 @@ from typing import Any, Iterable
 import pandas as pd
 import yaml
 
-ROOT = Path(__file__).resolve().parents[2]
-SRC = ROOT / 'src'
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
+ROOT = Path(__file__).resolve().parents[3]
 
 from cdrbench.config import load_domains_config
 from cdrbench.domain_assignment import build_domain_execution_plan
-from scripts.prepare_data.materialize_domain_workflows import (
+from cdrbench.prepare_data.materialize_domain_workflows import (
     FILTER_CALIBRATION_RULES,
     FILTER_STATUS_RULES,
     RATIO_THRESHOLD_KEYS,

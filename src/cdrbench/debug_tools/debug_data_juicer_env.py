@@ -8,7 +8,7 @@ import traceback
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 VENDORED_DJ = ROOT / 'data-juicer'
 
 
@@ -100,7 +100,7 @@ def main() -> None:
 
     print_header('How To Share')
     print('Run this command from repo root and paste the full output:')
-    print('python scripts/debug/debug_data_juicer_env.py')
+    print('PYTHONPATH=src python -m cdrbench.debug_tools.debug_data_juicer_env')
 
 
 if __name__ == '__main__':

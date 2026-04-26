@@ -4,18 +4,12 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import sys
 from pathlib import Path
 from typing import Any, Iterable
 
 import yaml
 
-ROOT = Path(__file__).resolve().parents[2]
-SRC = ROOT / 'src'
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
+ROOT = Path(__file__).resolve().parents[3]
 
 from cdrbench.llm_utils import build_client, chat_completion, parse_json_response, resolve_model
 
@@ -138,10 +132,11 @@ You will be given:
 1. The benchmark track and domain.
 2. The internal workflow sequence and filter parameters.
 3. Source code and documentation snippets for the operators.
-4. A list of desired prompt-style variants.
+4. A list of requested style slots.
 
 Your task:
-- Generate multiple diverse natural-language user requests that are FUNCTIONALLY EQUIVALENT to the workflow.
+- Generate exactly one candidate user requirement body for every requested style slot.
+- The result for every slot must be FUNCTIONALLY EQUIVALENT to the workflow.
 - Pretend the user has never seen the code.
 - Never mention operator names, parameter names, class names, file names, YAML, Python, or implementation details.
 - Preserve the exact workflow order and all essential filter semantics.
@@ -164,6 +159,7 @@ Return JSON only, with this exact schema:
 {
   "candidates": [
     {
+      "request_key": "...",
       "style_id": "...",
       "style_label": "...",
       "user_requirement": "...",
@@ -173,18 +169,48 @@ Return JSON only, with this exact schema:
 }
 """
 
-SYSTEM_PROMPT = """You are a careful data refinement engine. Follow the user's data-refinement request exactly and in order. Return only the required JSON object. Do not explain your reasoning."""
+JUDGE_SYSTEM_PROMPT = """You are a strict benchmark prompt judge.
 
-OUTPUT_CONTRACT = """Output format:
-Return exactly one valid JSON object and nothing else.
-Use one of these two forms:
-{"status":"KEEP","clean_text":"..."}
-{"status":"DROP","clean_text":"..."}
+You will be given:
+- The internal workflow definition and filter parameters.
+- The operator code/doc evidence.
+- One candidate user-facing prompt.
 
-Rules:
-- If the requested filtering/quality check rejects the current text, return DROP and set clean_text to the current text at the point where it was rejected.
-- If the sample is kept, return KEEP and put the final refined text in clean_text.
-- Do not include Markdown fences, comments, explanations, or extra keys."""
+Judge whether the prompt is faithful to what the workflow actually does.
+
+Mandatory keep conditions:
+1. Functional equivalence: the prompt requests the same transformation and filtering behavior.
+2. Order correctness: the requested order matches the internal workflow order.
+3. No code leakage: the prompt does not mention operator names, parameter names, YAML, Python, hidden code, or implementation internals.
+4. Threshold grounding: if the workflow has filter parameters, all active numeric thresholds must appear as natural user-facing constraints, not vague words like "long enough" or "too repetitive".
+5. Wrapper compatibility: the user requirement can be safely combined with a fixed benchmark wrapper that separately supplies raw input text and the JSON output contract.
+
+Also score:
+- user_naturalness: does it sound like a plausible user request?
+- threshold_grounding: are thresholds/conditions expressed naturally and correctly?
+- clarity: is the request clear and executable?
+- style_distinctiveness: does this candidate sound distinct from a generic template for the same style?
+
+Return JSON only:
+{
+  "verdict": "keep" or "reject",
+  "must_pass": {
+    "functional_equivalence": true,
+    "order_correct": true,
+    "no_code_leakage": true,
+    "thresholds_grounded": true,
+    "wrapper_compatible": true
+  },
+  "scores": {
+    "user_naturalness": 1-5,
+    "threshold_grounding": 1-5,
+    "clarity": 1-5,
+    "style_distinctiveness": 1-5
+  },
+  "issues": ["..."],
+  "summary": "one short sentence"
+}
+"""
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -287,25 +313,50 @@ def _group_rows(rows: list[dict[str, Any]], skipped_ops: set[str]) -> tuple[dict
     return grouped, skipped
 
 
-def _style_subset(count: int) -> list[dict[str, str]]:
-    return STYLE_PRESETS[:count]
+def _style_requests(style_count: int, candidates_per_style: int) -> list[dict[str, Any]]:
+    requests: list[dict[str, Any]] = []
+    for style in STYLE_PRESETS[:style_count]:
+        for slot in range(1, candidates_per_style + 1):
+            requests.append(
+                {
+                    **style,
+                    'candidate_slot': slot,
+                    'request_key': f"{style['style_id']}__{slot}",
+                }
+            )
+    return requests
 
 
-def _format_style_for_llm(style: dict[str, str]) -> str:
+def _format_style_request(style_request: dict[str, Any]) -> str:
     return (
-        f"- style_id: {style['style_id']}\n"
-        f"  label: {style['label']}\n"
-        f"  definition: {style['definition']}\n"
-        f"  template: {style['template']}\n"
-        f"  example: {style['example']}\n"
-        f"  generation guidance: {style['guidance']}"
+        f"- request_key: {style_request['request_key']}\n"
+        f"  candidate_slot: {style_request['candidate_slot']}\n"
+        f"  style_id: {style_request['style_id']}\n"
+        f"  label: {style_request['label']}\n"
+        f"  definition: {style_request['definition']}\n"
+        f"  template: {style_request['template']}\n"
+        f"  example: {style_request['example']}\n"
+        f"  generation guidance: {style_request['guidance']}"
     )
 
 
-def _workflow_bundle(workflow_key: str, rows: list[dict[str, Any]], prompt_cfg: dict[str, Any], variants_per_workflow: int) -> dict[str, Any]:
+def _workflow_bundle(
+    workflow_key: str,
+    rows: list[dict[str, Any]],
+    prompt_cfg: dict[str, Any],
+    variants_per_workflow: int,
+    candidates_per_style: int,
+) -> dict[str, Any]:
     row = rows[0]
     operator_sequence = list(row.get('operator_sequence') or ([row['operator']] if row.get('operator') else []))
     filter_params_by_name = row.get('filter_params_by_name') if isinstance(row.get('filter_params_by_name'), dict) else {}
+    source_domain_set = sorted(
+        {
+            str(source_domain)
+            for source_domain in (workflow_row.get('source_domain') for workflow_row in rows)
+            if source_domain
+        }
+    )
     operators = []
     for op_name in operator_sequence:
         kind = _operator_kind(op_name)
@@ -336,13 +387,14 @@ def _workflow_bundle(workflow_key: str, rows: list[dict[str, Any]], prompt_cfg: 
         'filter_params_by_name': filter_params_by_name,
         'threshold_meta': row.get('threshold_meta') or {},
         'num_instances': len(rows),
-        'style_requests': _style_subset(variants_per_workflow),
+        'source_domain_set': source_domain_set,
+        'style_requests': _style_requests(variants_per_workflow, candidates_per_style),
         'operators': operators,
     }
 
 
 def _generation_user_prompt(bundle: dict[str, Any]) -> str:
-    style_lines = [_format_style_for_llm(style) for style in bundle['style_requests']]
+    style_lines = [_format_style_request(style) for style in bundle['style_requests']]
     op_blocks = []
     for op in bundle['operators']:
         params_json = json.dumps(op['params'], ensure_ascii=False, sort_keys=True)
@@ -360,7 +412,6 @@ def _generation_user_prompt(bundle: dict[str, Any]) -> str:
                 ]
             )
         )
-
     return (
         f"Benchmark track: {bundle['benchmark_track']}\n"
         f"Domain: {bundle['domain']}\n"
@@ -369,7 +420,7 @@ def _generation_user_prompt(bundle: dict[str, Any]) -> str:
         f"Internal operator sequence: {' -> '.join(bundle['operator_sequence'])}\n"
         f"Filter params by name: {json.dumps(bundle['filter_params_by_name'], ensure_ascii=False, sort_keys=True)}\n"
         f"Threshold meta: {json.dumps(bundle['threshold_meta'], ensure_ascii=False, sort_keys=True)}\n\n"
-        "Generate one candidate user requirement body for each requested style below.\n"
+        "Generate exactly one candidate user requirement body for every requested style slot below.\n"
         "Use the style definition, template, and example only as guidance; do not copy the example literally unless the workflow matches it.\n\n"
         f"{chr(10).join(style_lines)}\n\n"
         "Important: act as if the user has never seen code. Do not mention operator names, parameter names, class names, YAML, file paths, JSON schema, or implementation-specific terms.\n"
@@ -379,8 +430,60 @@ def _generation_user_prompt(bundle: dict[str, Any]) -> str:
     )
 
 
-def _cache_key(bundle: dict[str, Any], model: str) -> str:
-    return _stable_id(model, bundle['workflow_prompt_key'], bundle['style_requests'], bundle['operator_sequence'], bundle['filter_params_by_name'])
+def _judge_user_prompt(entry: dict[str, Any], candidate: dict[str, Any], *, client, model: str, temperature: float) -> dict[str, Any]:
+    operator_blocks = []
+    for op in entry.get('operators') or []:
+        operator_blocks.append(
+            '\n'.join(
+                [
+                    f"[Operator] {op.get('name')} ({op.get('kind')})",
+                    f"Parameters: {json.dumps(op.get('params') or {}, ensure_ascii=False, sort_keys=True)}",
+                    "[Documentation excerpt]",
+                    str(op.get('doc_excerpt') or ''),
+                    "[Source code]",
+                    str(op.get('code_excerpt') or ''),
+                ]
+            )
+        )
+    user_prompt = (
+        f"Benchmark track: {entry.get('benchmark_track')}\n"
+        f"Domain: {entry.get('domain')}\n"
+        f"Workflow type: {entry.get('workflow_type')}\n"
+        f"Order slot: {entry.get('order_slot')}\n"
+        f"Internal operator sequence: {' -> '.join(entry.get('operator_sequence') or [])}\n"
+        f"Filter params by name: {json.dumps(entry.get('filter_params_by_name') or {}, ensure_ascii=False, sort_keys=True)}\n"
+        f"Threshold meta: {json.dumps(entry.get('threshold_meta') or {}, ensure_ascii=False, sort_keys=True)}\n\n"
+        f"Candidate style: {candidate.get('style_id')} / {candidate.get('style_label')}\n"
+        f"Candidate slot: {candidate.get('candidate_slot')}\n"
+        f"Candidate user requirement body:\n{candidate.get('user_requirement')}\n\n"
+        "Fixed wrapper that will be appended by code: raw input text plus a JSON-only output contract with status and clean_text.\n\n"
+        "Operator evidence:\n"
+        f"{chr(10).join(operator_blocks)}"
+    )
+    content = chat_completion(
+        client=client,
+        model=model,
+        system_prompt=JUDGE_SYSTEM_PROMPT,
+        user_prompt=user_prompt,
+        temperature=temperature,
+    )
+    payload = parse_json_response(content)
+    if not isinstance(payload, dict):
+        raise RuntimeError('Judge did not return a JSON object.')
+    return payload
+
+
+def _cache_key(bundle: dict[str, Any], model: str, judge_model: str, prompt_source: str, min_average_score: float) -> str:
+    return _stable_id(
+        model,
+        judge_model,
+        prompt_source,
+        min_average_score,
+        bundle['workflow_prompt_key'],
+        bundle['style_requests'],
+        bundle['operator_sequence'],
+        bundle['filter_params_by_name'],
+    )
 
 
 def _load_cache(path: Path) -> dict[str, dict[str, Any]]:
@@ -389,8 +492,9 @@ def _load_cache(path: Path) -> dict[str, dict[str, Any]]:
     cache = {}
     for row in _read_jsonl(path):
         key = row.get('cache_key')
-        if isinstance(key, str):
-            cache[key] = row
+        entry = row.get('library_entry')
+        if isinstance(key, str) and isinstance(entry, dict):
+            cache[key] = entry
     return cache
 
 
@@ -407,6 +511,7 @@ def _call_llm_for_candidates(
     model: str,
     temperature: float,
 ) -> list[dict[str, Any]]:
+    request_map = {str(item['request_key']): item for item in bundle['style_requests']}
     content = chat_completion(
         client=client,
         model=model,
@@ -422,15 +527,23 @@ def _call_llm_for_candidates(
     for item in payload['candidates']:
         if not isinstance(item, dict):
             continue
-        style_id = str(item.get('style_id') or '')
-        user_requirement = str(item.get('user_requirement') or item.get('user_request') or '').strip()
-        if not style_id or not user_requirement or user_requirement in seen:
+        request_key = str(item.get('request_key') or '')
+        request_meta = request_map.get(request_key)
+        if request_meta is None:
             continue
-        seen.add(user_requirement)
+        style_id = str(item.get('style_id') or request_meta['style_id'])
+        user_requirement = str(item.get('user_requirement') or item.get('user_request') or '').strip()
+        dedup_key = (request_key, user_requirement)
+        if not request_key or not user_requirement or dedup_key in seen:
+            continue
+        seen.add(dedup_key)
         candidates.append(
             {
+                'candidate_id': _stable_id(bundle['workflow_prompt_key'], request_key, user_requirement),
+                'request_key': request_key,
+                'candidate_slot': int(request_meta['candidate_slot']),
                 'style_id': style_id,
-                'style_label': str(item.get('style_label') or style_id),
+                'style_label': str(item.get('style_label') or request_meta['label']),
                 'style_notes': str(item.get('style_notes') or ''),
                 'user_requirement': user_requirement,
             }
@@ -438,41 +551,12 @@ def _call_llm_for_candidates(
     return candidates
 
 
-def _build_user_prompt(candidate: dict[str, Any], input_text: str) -> str:
-    return (
-        f"{candidate['user_requirement']}\n\n"
-        f"{OUTPUT_CONTRACT}\n\n"
-        "Raw input text:\n"
-        "<<<CDR_INPUT\n"
-        f"{input_text}\n"
-        "CDR_INPUT>>>"
-    )
-
-
-def _prompt_variant(candidate: dict[str, Any], input_text: str) -> dict[str, Any]:
-    user_prompt = _build_user_prompt(candidate, input_text)
-    return {
-        **candidate,
-        'user_prompt': user_prompt,
-        'system_prompt': SYSTEM_PROMPT,
-        'prompt': SYSTEM_PROMPT + '\n\n' + user_prompt,
-        'messages': [
-            {'role': 'system', 'content': SYSTEM_PROMPT},
-            {'role': 'user', 'content': user_prompt},
-        ],
-        'expected_response_format': {
-            'type': 'json_object',
-            'schema_hint': '{"status":"KEEP","clean_text":"..."} or {"status":"DROP","clean_text":"..."}',
-        },
-    }
-
-
 def _template_candidates(bundle: dict[str, Any], prompt_cfg: dict[str, Any]) -> list[dict[str, Any]]:
     domain_contexts = prompt_cfg.get('domain_contexts') or {}
     scenario = str(domain_contexts.get(str(bundle.get('domain'))) or 'Perform data refinement.')
-    operator_lines = []
     operators_cfg = prompt_cfg.get('operators') or {}
     filters_cfg = prompt_cfg.get('filters') or {}
+    operator_lines = []
     for op_name in bundle['operator_sequence']:
         if op_name.endswith('_filter'):
             hint = (filters_cfg.get(op_name) or {}).get('natural_language_intent') or f'Apply {op_name}.'
@@ -481,19 +565,22 @@ def _template_candidates(bundle: dict[str, Any], prompt_cfg: dict[str, Any]) -> 
         operator_lines.append(hint)
     joined = ' Then '.join(operator_lines)
     candidates = []
-    for style in bundle['style_requests']:
-        if style['style_id'] == 'imperative_checklist':
+    for request_meta in bundle['style_requests']:
+        if request_meta['style_id'] == 'imperative_checklist':
             text = f'{scenario} Please execute these steps in order: {joined}.'
-        elif style['style_id'] == 'goal_oriented':
+        elif request_meta['style_id'] == 'goal_oriented':
             text = f'The goal is to refine this text for {bundle.get("domain")} use. {joined}.'
-        elif style['style_id'] == 'application_context':
+        elif request_meta['style_id'] == 'application_context':
             text = f'For downstream processing, please clean this data carefully. {joined}.'
         else:
             text = f'{scenario} {joined}.'
         candidates.append(
             {
-                'style_id': style['style_id'],
-                'style_label': style['label'],
+                'candidate_id': _stable_id(bundle['workflow_prompt_key'], request_meta['request_key'], text),
+                'request_key': request_meta['request_key'],
+                'candidate_slot': int(request_meta['candidate_slot']),
+                'style_id': request_meta['style_id'],
+                'style_label': request_meta['label'],
                 'style_notes': 'template fallback',
                 'user_requirement': text,
             }
@@ -501,18 +588,95 @@ def _template_candidates(bundle: dict[str, Any], prompt_cfg: dict[str, Any]) -> 
     return candidates
 
 
+def _build_library_entry(
+    *,
+    bundle: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    prompt_source: str,
+    generation_model: str,
+    judge_model: str,
+    min_average_score: float,
+    client,
+    judge_temperature: float,
+) -> dict[str, Any]:
+    judged_candidates = []
+    accepted_candidates = []
+    accepted_style_ids: set[str] = set()
+    for candidate in candidates:
+        verdict = _judge_user_prompt(bundle, candidate, client=client, model=judge_model, temperature=judge_temperature)
+        must_pass = verdict.get('must_pass') if isinstance(verdict.get('must_pass'), dict) else {}
+        scores = verdict.get('scores') if isinstance(verdict.get('scores'), dict) else {}
+        average_score = sum(
+            float(scores.get(key, 0))
+            for key in ('user_naturalness', 'threshold_grounding', 'clarity', 'style_distinctiveness')
+        ) / 4.0
+        keep = (
+            all(
+                bool(must_pass.get(key))
+                for key in (
+                    'functional_equivalence',
+                    'order_correct',
+                    'no_code_leakage',
+                    'thresholds_grounded',
+                    'wrapper_compatible',
+                )
+            )
+            and average_score >= min_average_score
+            and str(verdict.get('verdict')).lower() == 'keep'
+        )
+        judged_candidate = {
+            **candidate,
+            'judge_average_score': round(average_score, 4),
+            'accepted': keep,
+        }
+        judged_candidates.append(judged_candidate)
+        if keep:
+            accepted_style_ids.add(str(candidate.get('style_id') or ''))
+            accepted_candidates.append(candidate)
+    return {
+        **bundle,
+        'prompt_source': prompt_source,
+        'generation_model': generation_model,
+        'judge_model': judge_model,
+        'requested_style_count': len({style['style_id'] for style in bundle['style_requests']}),
+        'candidates_per_style': max((int(style['candidate_slot']) for style in bundle['style_requests']), default=0),
+        'requested_candidate_count': len(bundle['style_requests']),
+        'generated_candidate_count': len(candidates),
+        'accepted_candidate_count': len(accepted_candidates),
+        'accepted_style_count': len(accepted_style_ids),
+        'min_average_score': min_average_score,
+        'candidates': accepted_candidates,
+        'judged_candidate_summary': [
+            {
+                'candidate_id': candidate['candidate_id'],
+                'style_id': candidate['style_id'],
+                'candidate_slot': candidate['candidate_slot'],
+                'accepted': candidate['accepted'],
+                'judge_average_score': candidate['judge_average_score'],
+            }
+            for candidate in judged_candidates
+        ],
+    }
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description='Generate diverse workflow-level prompt candidates for CDR-Bench benchmark instances.')
+    parser = argparse.ArgumentParser(description='Generate and judge workflow-level CDR-Bench prompt libraries.')
     parser.add_argument('--benchmark-dir', default='data/benchmark')
     parser.add_argument('--output-dir', default='data/benchmark_prompts')
     parser.add_argument('--prompt-config', default='configs/workflow_prompting.yaml')
     parser.add_argument('--tracks', nargs='*', default=list(TRACK_FILES), choices=sorted(TRACK_FILES))
     parser.add_argument('--prompt-source', choices=['llm', 'template'], default='llm')
-    parser.add_argument('--model', default=None, help='OpenAI-compatible model name. Defaults to OPENAI_MODEL / LLM_MODEL env.')
-    parser.add_argument('--base-url', default=None, help='OpenAI-compatible base URL. Defaults to OPENAI_BASE_URL / LLM_BASE_URL env.')
-    parser.add_argument('--api-key', default=None, help='API key. Defaults to OPENAI_API_KEY / DASHSCOPE_API_KEY env.')
+    parser.add_argument('--model', default=None, help='OpenAI-compatible generation model. Defaults to OPENAI_MODEL / LLM_MODEL env.')
+    parser.add_argument('--base-url', default=None, help='OpenAI-compatible generation base URL. Defaults to OPENAI_BASE_URL / LLM_BASE_URL env.')
+    parser.add_argument('--api-key', default=None, help='Generation API key. Defaults to OPENAI_API_KEY / DASHSCOPE_API_KEY env.')
+    parser.add_argument('--judge-model', default=None, help='OpenAI-compatible judge model. Defaults to --model or OPENAI_MODEL / LLM_MODEL env.')
+    parser.add_argument('--judge-base-url', default=None, help='Judge base URL. Defaults to --base-url or OPENAI_BASE_URL / LLM_BASE_URL env.')
+    parser.add_argument('--judge-api-key', default=None, help='Judge API key. Defaults to --api-key or OPENAI_API_KEY / DASHSCOPE_API_KEY env.')
     parser.add_argument('--temperature', type=float, default=0.8)
-    parser.add_argument('--variants-per-workflow', type=int, default=6)
+    parser.add_argument('--judge-temperature', type=float, default=0.0)
+    parser.add_argument('--variants-per-workflow', type=int, default=11, help='How many style presets to request per workflow.')
+    parser.add_argument('--candidates-per-style', type=int, default=3, help='How many prompt candidates to generate for each requested style.')
+    parser.add_argument('--min-average-score', type=float, default=3.5)
     parser.add_argument(
         '--skip-operators',
         nargs='*',
@@ -521,13 +685,13 @@ def main() -> None:
     )
     parser.add_argument(
         '--cache-path',
-        default='data/benchmark_prompts/llm_prompt_cache.jsonl',
-        help='Cache file for workflow-level LLM prompt generation.',
+        default='data/benchmark_prompts/workflow_prompt_library_cache.jsonl',
+        help='Cache file for workflow-level prompt generation and judging.',
     )
     parser.add_argument(
         '--resume',
         action='store_true',
-        help='Reuse workflow-level prompt cache from --cache-path so interrupted runs can continue without regenerating finished workflows.',
+        help='Reuse workflow-level cache from --cache-path so interrupted runs can continue without regenerating finished workflows.',
     )
     args = parser.parse_args()
 
@@ -536,20 +700,25 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     prompt_cfg = _load_yaml((ROOT / args.prompt_config).resolve())
 
-    model = resolve_model(args.model)
-    client = build_client(api_key=args.api_key, base_url=args.base_url) if args.prompt_source == 'llm' else None
+    generation_model = resolve_model(args.model)
+    judge_model = resolve_model(args.judge_model or args.model)
+    generation_client = build_client(api_key=args.api_key, base_url=args.base_url) if args.prompt_source == 'llm' else None
+    judge_client = build_client(
+        api_key=args.judge_api_key or args.api_key,
+        base_url=args.judge_base_url or args.base_url,
+    )
+
     cache_path = (ROOT / args.cache_path).resolve()
     if args.resume:
         cache = _load_cache(cache_path)
-        print(f'resume enabled: loaded {len(cache)} cached workflow prompt entries from {cache_path}', flush=True)
+        print(f'resume enabled: loaded {len(cache)} cached workflow prompt library entries from {cache_path}', flush=True)
     else:
         cache = {}
         if cache_path.exists():
             cache_path.unlink()
-            print(f'resume disabled: cleared existing prompt cache at {cache_path}', flush=True)
+            print(f'resume disabled: cleared existing workflow prompt cache at {cache_path}', flush=True)
 
     prompt_library_rows: list[dict[str, Any]] = []
-    benchmark_rows: list[dict[str, Any]] = []
     summary_rows: list[dict[str, Any]] = []
     skipped_ops = set(args.skip_operators)
 
@@ -560,63 +729,84 @@ def main() -> None:
             continue
         rows = _read_jsonl(input_path)
         grouped, skipped_count = _group_rows(rows, skipped_ops)
-        track_output_rows = []
+        track_generated_count = 0
+        track_accepted_count = 0
+        accepted_workflow_count = 0
+
         for workflow_key, workflow_rows in grouped.items():
-            bundle = _workflow_bundle(workflow_key, workflow_rows, prompt_cfg, args.variants_per_workflow)
-            cache_key = _cache_key(bundle, model)
+            bundle = _workflow_bundle(
+                workflow_key,
+                workflow_rows,
+                prompt_cfg,
+                args.variants_per_workflow,
+                args.candidates_per_style,
+            )
+            cache_key = _cache_key(
+                bundle,
+                generation_model,
+                judge_model,
+                args.prompt_source,
+                args.min_average_score,
+            )
             cached = cache.get(cache_key)
             if cached is not None:
-                candidates = list(cached.get('candidates') or [])
+                library_entry = cached
                 source = 'cache'
             else:
                 candidates = (
-                    _call_llm_for_candidates(bundle=bundle, client=client, model=model, temperature=args.temperature)
+                    _call_llm_for_candidates(
+                        bundle=bundle,
+                        client=generation_client,
+                        model=generation_model,
+                        temperature=args.temperature,
+                    )
                     if args.prompt_source == 'llm'
                     else _template_candidates(bundle, prompt_cfg)
+                )
+                library_entry = _build_library_entry(
+                    bundle=bundle,
+                    candidates=candidates,
+                    prompt_source=args.prompt_source,
+                    generation_model=generation_model,
+                    judge_model=judge_model,
+                    min_average_score=args.min_average_score,
+                    client=judge_client,
+                    judge_temperature=args.judge_temperature,
                 )
                 cache_row = {
                     'cache_key': cache_key,
                     'workflow_prompt_key': workflow_key,
-                    'model': model,
-                    'prompt_source': args.prompt_source,
-                    'candidates': candidates,
+                    'library_entry': library_entry,
                 }
                 _append_jsonl(cache_path, cache_row)
-                cache[cache_key] = cache_row
+                cache[cache_key] = library_entry
                 source = args.prompt_source
 
-            library_row = {
-                **bundle,
-                'candidate_count': len(candidates),
-                'prompt_source': source,
-                'model': model,
-                'candidates': candidates,
+            library_entry = {
+                **library_entry,
+                'prompt_source': library_entry.get('prompt_source') or source,
             }
-            prompt_library_rows.append(library_row)
+            prompt_library_rows.append(library_entry)
+            track_generated_count += int(library_entry.get('generated_candidate_count', 0) or 0)
+            track_accepted_count += int(library_entry.get('accepted_candidate_count', 0) or 0)
+            if int(library_entry.get('accepted_candidate_count', 0) or 0) > 0:
+                accepted_workflow_count += 1
 
-            for row in workflow_rows:
-                prompt_variants = [_prompt_variant(candidate, str(row.get('input_text', ''))) for candidate in candidates]
-                track_output_rows.append(
-                    {
-                        **row,
-                        'workflow_prompt_key': workflow_key,
-                        'prompt_candidate_count': len(candidates),
-                        'prompt_variants': prompt_variants,
-                    }
-                )
-
-        count = _write_jsonl(output_dir / TRACK_FILES[track], track_output_rows)
-        benchmark_rows.extend(track_output_rows)
         summary_rows.append(
             {
                 'track': track,
                 'input_rows': len(rows),
-                'kept_rows': count,
                 'skipped_rows': skipped_count,
                 'workflow_count': len(grouped),
+                'accepted_workflow_count': accepted_workflow_count,
+                'variants_per_workflow': args.variants_per_workflow,
+                'candidates_per_style': args.candidates_per_style,
+                'generated_candidate_count': track_generated_count,
+                'accepted_candidate_count': track_accepted_count,
+                'generation_model': generation_model,
+                'judge_model': judge_model,
             }
         )
-        print(f'wrote track mapping {track}: {count} rows -> {output_dir / TRACK_FILES[track]}', flush=True)
 
     _write_jsonl(output_dir / 'workflow_prompt_library.jsonl', prompt_library_rows)
     _write_jsonl(output_dir / 'prompt_generation_summary.jsonl', summary_rows)
