@@ -287,7 +287,21 @@ The overview figure shows:
 
 Prompt generation is intentionally separate from GT construction, so prompt wording can be revised without rerunning Data-Juicer references.
 
-Generate workflow-level prompt candidates with an external LLM:
+Atomic preview first:
+
+```bash
+.venv-ops/bin/python scripts/prepare_data/generate_benchmark_prompts.py \
+  --benchmark-dir data/benchmark \
+  --output-dir data/benchmark_prompts_atomic_preview \
+  --prompt-config configs/workflow_prompting.yaml \
+  --prompt-source llm \
+  --tracks atomic_ops \
+  --variants-per-workflow 3 \
+  --cache-path data/benchmark_prompts_atomic_preview/llm_prompt_cache.jsonl \
+  --resume
+```
+
+If the atomic prompts look good, continue with the main and order-sensitivity tracks:
 
 ```bash
 .venv-ops/bin/python scripts/prepare_data/generate_benchmark_prompts.py \
@@ -295,7 +309,10 @@ Generate workflow-level prompt candidates with an external LLM:
   --output-dir data/benchmark_prompts \
   --prompt-config configs/workflow_prompting.yaml \
   --prompt-source llm \
-  --variants-per-workflow 6
+  --tracks main order_sensitivity \
+  --variants-per-workflow 6 \
+  --cache-path data/benchmark_prompts/llm_prompt_cache.jsonl \
+  --resume
 ```
 
 Outputs:
@@ -345,6 +362,12 @@ The generated requirement candidates should preserve:
 Current style pool includes imperative checklist, goal-oriented description, application-context task, quality-control request, analyst handoff, concise brief, policy-like requirement, workflow narrative, end-weighted instruction, negative-constraint driven, and conversational cooperative styles.
 
 By default, prompt generation skips workflows containing `flagged_words_filter` and `stopwords_filter`.
+
+Notes:
+
+- Prompt generation is grouped by workflow signature rather than by individual sample, so all samples sharing the same workflow reuse the same prompt-style candidates.
+- `--variants-per-workflow` controls how many prompt styles to keep for each workflow.
+- `--resume` reuses the workflow-level cache at `--cache-path`, so an interrupted run can continue without re-calling the LLM for finished workflows.
 
 Then run the LLM judge:
 

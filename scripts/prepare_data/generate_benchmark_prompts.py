@@ -524,6 +524,11 @@ def main() -> None:
         default='data/benchmark_prompts/llm_prompt_cache.jsonl',
         help='Cache file for workflow-level LLM prompt generation.',
     )
+    parser.add_argument(
+        '--resume',
+        action='store_true',
+        help='Reuse workflow-level prompt cache from --cache-path so interrupted runs can continue without regenerating finished workflows.',
+    )
     args = parser.parse_args()
 
     benchmark_dir = (ROOT / args.benchmark_dir).resolve()
@@ -534,7 +539,14 @@ def main() -> None:
     model = resolve_model(args.model)
     client = build_client(api_key=args.api_key, base_url=args.base_url) if args.prompt_source == 'llm' else None
     cache_path = (ROOT / args.cache_path).resolve()
-    cache = _load_cache(cache_path)
+    if args.resume:
+        cache = _load_cache(cache_path)
+        print(f'resume enabled: loaded {len(cache)} cached workflow prompt entries from {cache_path}', flush=True)
+    else:
+        cache = {}
+        if cache_path.exists():
+            cache_path.unlink()
+            print(f'resume disabled: cleared existing prompt cache at {cache_path}', flush=True)
 
     prompt_library_rows: list[dict[str, Any]] = []
     benchmark_rows: list[dict[str, Any]] = []
