@@ -2,9 +2,11 @@
 
 ## 1. Title and Scope
 
-**CDR-Bench: Benchmarking LLMs for Compositional Data Refinement**
+**CDR-Bench: Benchmarking LLMs on Compositional Data Refinement Recipes**
 
-CDR-Bench evaluates whether LLMs can directly execute realistic, multi-step data-refinement requests over raw text and document-source data.
+CDR-Bench studies an execution fidelity gap in natural-language data refinement: models often understand what a user wants, but fail to faithfully execute the requested refinement policy on individual samples when cleaning, filtering, and ordering constraints interact.
+
+CDR-Bench therefore evaluates whether LLMs can directly execute realistic, multi-step data-refinement requests over raw text and document-source data.
 
 The core task is not workflow generation, tool calling, code generation, or user-simulator interaction. A model receives a raw sample and a complete user-facing refinement request, then outputs the final deterministic result:
 
@@ -22,15 +24,33 @@ For `DROP`, `clean_text` is the current text at the point where the deterministi
 
 The hidden reference is produced by deterministic Data-Juicer-backed operators. Final prompts should describe the user need in natural language rather than exposing operator names.
 
+This benchmark intentionally isolates direct refinement execution from agentic tool use. Full code-generation or workflow-synthesis settings entangle planning, tool invocation, environment interaction, and debugging. CDR-Bench instead measures a lower-level capability: whether a model can operationalize a compositional refinement policy directly and faithfully on the sample itself.
+
 ## 2. Core Research Question
 
 Given a raw unstructured data sample and a natural-language compositional refinement request, can an LLM produce the same final keep/drop decision and refined text as a deterministic reference pipeline?
 
 This question matters because realistic data curation is rarely a single rewrite. It often combines cleaning, normalization, redaction, extraction, and filtering, and the final answer depends on both the operations and their order.
 
+More specifically, CDR-Bench asks whether LLMs can faithfully operationalize refinement policies rather than merely:
+
+- understand the request at a high level
+- solve isolated single-step editing problems
+- generate code or workflow plans that might, in principle, implement the request
+
+The benchmark is designed to expose three concrete forms of the execution fidelity gap:
+
+- intent understanding does not guarantee instance-level faithful execution
+- atomic operator competence does not guarantee correct compositional execution
+- recognizing an operation order does not guarantee following that order faithfully in the output
+
+In this sense, CDR-Bench is not a generic instruction-following benchmark. It measures whether a model can execute a compositional data-refinement policy on individual instances with faithful keep/drop decisions, faithful text transformation, and faithful order adherence.
+
 ## 3. Motivation
 
 Data refinement is a routine step before pretraining, RAG ingestion, search indexing, policy/report analysis, and scientific corpus construction.
+
+In many realistic settings, users express these refinement needs in natural language first, not as finalized code. A scientist, analyst, or data engineer may know the desired policy, but still want the system to directly return cleaned data rather than a Python script, workflow graph, or partial plan. This is especially common in lightweight, iterative, or human-in-the-loop data preparation.
 
 Representative user-facing requests:
 
@@ -39,7 +59,15 @@ Representative user-facing requests:
 - "Remove disclaimers, table residue, and abnormal long lines from reports, then decide whether the document is suitable for retrieval."
 - "Remove LaTeX comments and bibliography, expand macros, normalize the source, then decide whether the source should be kept."
 
-The benchmark should therefore measure compositional execution rather than isolated text editing or isolated binary filtering.
+Existing work covers adjacent but different capabilities:
+
+- workflow generation and code synthesis benchmark whether a model can propose or implement a pipeline
+- data selection work studies which samples should be kept at corpus scale
+- text editing work studies whether a model can perform precise modifications
+
+What remains under-measured is whether a model can directly and faithfully execute a user-stated refinement policy on a specific sample.
+
+The benchmark should therefore measure compositional execution rather than isolated text editing, isolated binary filtering, or end-to-end code generation. This framing also gives CDR-Bench practical relevance: direct execution is useful in its own right, and it is a prerequisite capability for stronger agentic data-processing systems.
 
 ## 4. Domains
 

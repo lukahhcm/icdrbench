@@ -212,6 +212,10 @@ Return JSON only:
 }
 """
 
+MAX_JSON_RETRIES = 3
+RAW_RESPONSE_PREVIEW_CHARS = 800
+EVAL_PROGRESS_EVERY = 200
+
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     rows = []
@@ -460,17 +464,36 @@ def _judge_user_prompt(entry: dict[str, Any], candidate: dict[str, Any], *, clie
         "Operator evidence:\n"
         f"{chr(10).join(operator_blocks)}"
     )
-    content = chat_completion(
-        client=client,
-        model=model,
-        system_prompt=JUDGE_SYSTEM_PROMPT,
-        user_prompt=user_prompt,
-        temperature=temperature,
-    )
-    payload = parse_json_response(content)
-    if not isinstance(payload, dict):
-        raise RuntimeError('Judge did not return a JSON object.')
-    return payload
+    last_error: Exception | None = None
+    last_content = ''
+    for attempt in range(1, MAX_JSON_RETRIES + 1):
+        content = chat_completion(
+            client=client,
+            model=model,
+            system_prompt=JUDGE_SYSTEM_PROMPT,
+            user_prompt=user_prompt,
+            temperature=temperature,
+        )
+        last_content = content
+        try:
+            payload = parse_json_response(content)
+            if not isinstance(payload, dict):
+                raise RuntimeError('Judge did not return a JSON object.')
+            return payload
+        except Exception as exc:
+            last_error = exc
+            print(
+                f"retry judge JSON parse: attempt={attempt}/{MAX_JSON_RETRIES} "
+                f"workflow={entry.get('workflow_prompt_key')} candidate={candidate.get('candidate_id')} "
+                f"error={exc}",
+                flush=True,
+            )
+    preview = last_content[:RAW_RESPONSE_PREVIEW_CHARS].replace('\n', '\\n')
+    raise RuntimeError(
+        f"Judge JSON parse failed after {MAX_JSON_RETRIES} attempts for "
+        f"workflow={entry.get('workflow_prompt_key')} candidate={candidate.get('candidate_id')}. "
+        f"Last error: {last_error}. Raw preview: {preview}"
+    ) from last_error
 
 
 def _cache_key(bundle: dict[str, Any], model: str, judge_model: str, prompt_source: str, min_average_score: float) -> str:
@@ -512,16 +535,37 @@ def _call_llm_for_candidates(
     temperature: float,
 ) -> list[dict[str, Any]]:
     request_map = {str(item['request_key']): item for item in bundle['style_requests']}
-    content = chat_completion(
-        client=client,
-        model=model,
-        system_prompt=GENERATION_SYSTEM_PROMPT,
-        user_prompt=_generation_user_prompt(bundle),
-        temperature=temperature,
-    )
-    payload = parse_json_response(content)
-    if not isinstance(payload, dict) or not isinstance(payload.get('candidates'), list):
-        raise RuntimeError('LLM did not return the expected JSON object with a candidates list.')
+    last_error: Exception | None = None
+    last_content = ''
+    payload: dict[str, Any] | None = None
+    for attempt in range(1, MAX_JSON_RETRIES + 1):
+        content = chat_completion(
+            client=client,
+            model=model,
+            system_prompt=GENERATION_SYSTEM_PROMPT,
+            user_prompt=_generation_user_prompt(bundle),
+            temperature=temperature,
+        )
+        last_content = content
+        try:
+            parsed = parse_json_response(content)
+            if not isinstance(parsed, dict) or not isinstance(parsed.get('candidates'), list):
+                raise RuntimeError('LLM did not return the expected JSON object with a candidates list.')
+            payload = parsed
+            break
+        except Exception as exc:
+            last_error = exc
+            print(
+                f"retry generation JSON parse: attempt={attempt}/{MAX_JSON_RETRIES} "
+                f"workflow={bundle.get('workflow_prompt_key')} error={exc}",
+                flush=True,
+            )
+    if payload is None:
+        preview = last_content[:RAW_RESPONSE_PREVIEW_CHARS].replace('\n', '\\n')
+        raise RuntimeError(
+            f"Generation JSON parse failed after {MAX_JSON_RETRIES} attempts for "
+            f"workflow={bundle.get('workflow_prompt_key')}. Last error: {last_error}. Raw preview: {preview}"
+        ) from last_error
     candidates = []
     seen = set()
     for item in payload['candidates']:
@@ -603,7 +647,32 @@ def _build_library_entry(
     accepted_candidates = []
     accepted_style_ids: set[str] = set()
     for candidate in candidates:
-        verdict = _judge_user_prompt(bundle, candidate, client=client, model=judge_model, temperature=judge_temperature)
+        try:
+            verdict = _judge_user_prompt(bundle, candidate, client=client, model=judge_model, temperature=judge_temperature)
+        except Exception as exc:
+            print(
+                f"judge failed; rejecting candidate "
+                f"workflow={bundle.get('workflow_prompt_key')} candidate={candidate.get('candidate_id')} error={exc}",
+                flush=True,
+            )
+            verdict = {
+                'verdict': 'reject',
+                'must_pass': {
+                    'functional_equivalence': False,
+                    'order_correct': False,
+                    'no_code_leakage': False,
+                    'thresholds_grounded': False,
+                    'wrapper_compatible': False,
+                },
+                'scores': {
+                    'user_naturalness': 0,
+                    'threshold_grounding': 0,
+                    'clarity': 0,
+                    'style_distinctiveness': 0,
+                },
+                'issues': [f'judge_error: {exc}'],
+                'summary': 'judge failed to return parseable JSON',
+            }
         must_pass = verdict.get('must_pass') if isinstance(verdict.get('must_pass'), dict) else {}
         scores = verdict.get('scores') if isinstance(verdict.get('scores'), dict) else {}
         average_score = sum(
@@ -653,9 +722,37 @@ def _build_library_entry(
                 'candidate_slot': candidate['candidate_slot'],
                 'accepted': candidate['accepted'],
                 'judge_average_score': candidate['judge_average_score'],
+                'judge_issues': list(candidate.get('issues') or []),
             }
             for candidate in judged_candidates
         ],
+    }
+
+
+def _failed_library_entry(
+    *,
+    bundle: dict[str, Any],
+    prompt_source: str,
+    generation_model: str,
+    judge_model: str,
+    min_average_score: float,
+    error: Exception,
+) -> dict[str, Any]:
+    return {
+        **bundle,
+        'prompt_source': prompt_source,
+        'generation_model': generation_model,
+        'judge_model': judge_model,
+        'requested_style_count': len({style['style_id'] for style in bundle['style_requests']}),
+        'candidates_per_style': max((int(style['candidate_slot']) for style in bundle['style_requests']), default=0),
+        'requested_candidate_count': len(bundle['style_requests']),
+        'generated_candidate_count': 0,
+        'accepted_candidate_count': 0,
+        'accepted_style_count': 0,
+        'min_average_score': min_average_score,
+        'candidates': [],
+        'judged_candidate_summary': [],
+        'generation_error': str(error),
     }
 
 
@@ -732,8 +829,13 @@ def main() -> None:
         track_generated_count = 0
         track_accepted_count = 0
         accepted_workflow_count = 0
+        total_workflows = len(grouped)
+        print(
+            f"start track={track} input_rows={len(rows)} workflows={total_workflows} skipped_rows={skipped_count}",
+            flush=True,
+        )
 
-        for workflow_key, workflow_rows in grouped.items():
+        for workflow_index, (workflow_key, workflow_rows) in enumerate(grouped.items(), start=1):
             bundle = _workflow_bundle(
                 workflow_key,
                 workflow_rows,
@@ -753,34 +855,49 @@ def main() -> None:
                 library_entry = cached
                 source = 'cache'
             else:
-                candidates = (
-                    _call_llm_for_candidates(
-                        bundle=bundle,
-                        client=generation_client,
-                        model=generation_model,
-                        temperature=args.temperature,
+                try:
+                    candidates = (
+                        _call_llm_for_candidates(
+                            bundle=bundle,
+                            client=generation_client,
+                            model=generation_model,
+                            temperature=args.temperature,
+                        )
+                        if args.prompt_source == 'llm'
+                        else _template_candidates(bundle, prompt_cfg)
                     )
-                    if args.prompt_source == 'llm'
-                    else _template_candidates(bundle, prompt_cfg)
-                )
-                library_entry = _build_library_entry(
-                    bundle=bundle,
-                    candidates=candidates,
-                    prompt_source=args.prompt_source,
-                    generation_model=generation_model,
-                    judge_model=judge_model,
-                    min_average_score=args.min_average_score,
-                    client=judge_client,
-                    judge_temperature=args.judge_temperature,
-                )
-                cache_row = {
-                    'cache_key': cache_key,
-                    'workflow_prompt_key': workflow_key,
-                    'library_entry': library_entry,
-                }
-                _append_jsonl(cache_path, cache_row)
-                cache[cache_key] = library_entry
-                source = args.prompt_source
+                    library_entry = _build_library_entry(
+                        bundle=bundle,
+                        candidates=candidates,
+                        prompt_source=args.prompt_source,
+                        generation_model=generation_model,
+                        judge_model=judge_model,
+                        min_average_score=args.min_average_score,
+                        client=judge_client,
+                        judge_temperature=args.judge_temperature,
+                    )
+                    cache_row = {
+                        'cache_key': cache_key,
+                        'workflow_prompt_key': workflow_key,
+                        'library_entry': library_entry,
+                    }
+                    _append_jsonl(cache_path, cache_row)
+                    cache[cache_key] = library_entry
+                    source = args.prompt_source
+                except Exception as exc:
+                    print(
+                        f"workflow failed; continuing track={track} workflow={workflow_key} error={exc}",
+                        flush=True,
+                    )
+                    library_entry = _failed_library_entry(
+                        bundle=bundle,
+                        prompt_source=args.prompt_source,
+                        generation_model=generation_model,
+                        judge_model=judge_model,
+                        min_average_score=args.min_average_score,
+                        error=exc,
+                    )
+                    source = 'error'
 
             library_entry = {
                 **library_entry,
@@ -791,6 +908,13 @@ def main() -> None:
             track_accepted_count += int(library_entry.get('accepted_candidate_count', 0) or 0)
             if int(library_entry.get('accepted_candidate_count', 0) or 0) > 0:
                 accepted_workflow_count += 1
+            print(
+                f"progress track={track} workflow={workflow_index}/{total_workflows} "
+                f"source={source} accepted={library_entry.get('accepted_candidate_count', 0)} "
+                f"accepted_styles={library_entry.get('accepted_style_count', 0)} "
+                f"key={workflow_key}",
+                flush=True,
+            )
 
         summary_rows.append(
             {

@@ -9,6 +9,7 @@ from typing import Any, Iterable
 
 
 ROOT = Path(__file__).resolve().parents[3]
+EVAL_PROGRESS_EVERY = 200
 
 TRACK_FILES = {
     'main': 'main.jsonl',
@@ -194,18 +195,34 @@ def main() -> None:
             print(f'skip missing {track}: {input_path}', flush=True)
             continue
         rows = _read_jsonl(input_path)
+        total_rows = len(rows)
         output_rows = []
         missing_pool_rows = 0
         insufficient_style_rows = 0
-        for row in rows:
+        print(f'start eval track={track} input_rows={total_rows}', flush=True)
+        for row_index, row in enumerate(rows, start=1):
             workflow_prompt_key = _workflow_key(row)
             candidates = list(library_by_key.get(workflow_prompt_key) or [])
             if not candidates:
                 missing_pool_rows += 1
+                if row_index % EVAL_PROGRESS_EVERY == 0 or row_index == total_rows:
+                    print(
+                        f'progress eval track={track} row={row_index}/{total_rows} '
+                        f'kept={len(output_rows)} missing_pool={missing_pool_rows} '
+                        f'insufficient_styles={insufficient_style_rows}',
+                        flush=True,
+                    )
                 continue
             distinct_style_count = len({str(candidate.get('style_id') or '') for candidate in candidates if candidate.get('style_id')})
             if distinct_style_count < args.min_prompt_variants_per_sample:
                 insufficient_style_rows += 1
+                if row_index % EVAL_PROGRESS_EVERY == 0 or row_index == total_rows:
+                    print(
+                        f'progress eval track={track} row={row_index}/{total_rows} '
+                        f'kept={len(output_rows)} missing_pool={missing_pool_rows} '
+                        f'insufficient_styles={insufficient_style_rows}',
+                        flush=True,
+                    )
                 continue
             output_rows.append(
                 _eval_row(
@@ -216,6 +233,13 @@ def main() -> None:
                     prompt_sampling_seed=args.prompt_sampling_seed,
                 )
             )
+            if row_index % EVAL_PROGRESS_EVERY == 0 or row_index == total_rows:
+                print(
+                    f'progress eval track={track} row={row_index}/{total_rows} '
+                    f'kept={len(output_rows)} missing_pool={missing_pool_rows} '
+                    f'insufficient_styles={insufficient_style_rows}',
+                    flush=True,
+                )
 
         count = _write_jsonl(output_dir / TRACK_FILES[track], output_rows)
         summary_rows.append(

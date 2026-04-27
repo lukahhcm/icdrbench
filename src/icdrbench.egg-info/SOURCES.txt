@@ -1,0 +1,14 @@
+README.md
+pyproject.toml
+src/icdrbench/__init__.py
+src/icdrbench/config.py
+src/icdrbench/dj_operator_loader.py
+src/icdrbench/domain_assignment.py
+src/icdrbench/domain_labeling.py
+src/icdrbench/fetchers.py
+src/icdrbench/support_scan.py
+src/icdrbench.egg-info/PKG-INFO
+src/icdrbench.egg-info/SOURCES.txt
+src/icdrbench.egg-info/dependency_links.txt
+src/icdrbench.egg-info/requires.txt
+src/icdrbench.egg-info/top_level.txt
