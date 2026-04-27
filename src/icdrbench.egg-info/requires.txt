@@ -1,8 +1,0 @@
-requests
-datasets
-pandas
-pyyaml
-regex
-selectolax
-beautifulsoup4
-jsonlines
