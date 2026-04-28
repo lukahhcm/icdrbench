@@ -258,21 +258,21 @@ Atomic calibration:
 Evaluation metrics:
 
 - `status_match = predicted_status == reference_status`
-- `text_match = canonical(predicted_clean_text) == canonical(reference_text)`
-- `workflow_success = status_match AND text_match`
+- `text_exact_match = predicted_clean_text == reference_text`
+- `recipe_success = status_match AND text_exact_match`
 - `refinement_gain` is edit-distance improvement from input toward the reference:
 
 ```text
-d_input = edit_distance(canonical(input_text), canonical(reference_text))
-d_pred  = edit_distance(canonical(predicted_clean_text), canonical(reference_text))
+d_input = edit_distance(input_text, reference_text)
+d_pred  = edit_distance(predicted_clean_text, reference_text)
 
 if d_input == 0:
     refinement_gain = 1.0 if d_pred == 0 else 0.0
 else:
-    refinement_gain = clamp((d_input - d_pred) / d_input, -1.0, 1.0)
+    refinement_gain = 1 - d_pred / d_input
 ```
 
-The repo evaluator currently canonicalizes text with Unicode normalization plus whitespace collapsing before exact-match and edit-distance comparisons.
+The main evaluator uses raw-string exact match for `recipe_success`. It also reports a relaxed canonical-text match as a secondary diagnostic only.
 
 Benchmark composition visualization:
 
@@ -401,7 +401,7 @@ The scorer writes:
 - `by_source_domain.csv`
 - `by_reference_status.csv`
 
-`summary.json` reports `workflow_success_rate`, `status_accuracy`, `canonical_text_match_rate`, and `avg_refinement_gain`.
+`summary.json` reports `recipe_success_rate`, `status_accuracy`, `exact_text_match_rate`, `canonical_text_match_rate`, `avg_refinement_gain`, and `order_consistent_success_rate` when applicable.
 
 ## 11. Local vLLM Serving
 
@@ -428,6 +428,48 @@ Then point the atomic evaluator at the local server:
 ```
 
 The `vllm` launcher uses `--generation-config vllm` so server-side defaults from a model repo do not silently change benchmark decoding behavior.
+
+## 12. Evaluate All Tracks
+
+If you want one command that runs model inference and scoring across `atomic_ops`, `main`, and `order_sensitivity`, use:
+
+```bash
+./scripts/eval_benchmark_all_tracks.sh \
+  --model gpt-5.4 \
+  --base-url http://123.57.212.178:3333/v1 \
+  --output-root data/eval_runs/gpt54_all
+```
+
+For a local `vllm` server:
+
+```bash
+./scripts/eval_benchmark_all_tracks.sh \
+  --model local-model \
+  --base-url http://127.0.0.1:8000/v1 \
+  --api-key EMPTY \
+  --output-root data/eval_runs/local_model_all
+```
+
+Useful variants:
+
+```bash
+./scripts/eval_benchmark_all_tracks.sh --tracks main,order_sensitivity --resume
+./scripts/eval_benchmark_all_tracks.sh --predict-only --tracks atomic_ops
+./scripts/eval_benchmark_all_tracks.sh --score-only --predictions-root /path/to/predictions_root
+```
+
+Per-track outputs are written under:
+
+- `data/eval_runs/<run_name>/atomic_ops/`
+- `data/eval_runs/<run_name>/main/`
+- `data/eval_runs/<run_name>/order_sensitivity/`
+
+Each track writes:
+
+- `predictions.jsonl`
+- `scored/summary.json`
+- `scored/scored_predictions.jsonl`
+- slice CSVs such as `by_operator.csv`, `by_source_domain.csv`, and `by_reference_status.csv`
 
 Outputs:
 

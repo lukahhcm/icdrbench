@@ -20,11 +20,8 @@ def canonicalize_text(value: Any) -> str:
 
 
 def normalize_status(value: Any) -> str:
-    return canonicalize_text(value).upper()
-
-
-def clamp(value: float, lo: float, hi: float) -> float:
-    return max(lo, min(hi, value))
+    text = '' if value is None else str(value)
+    return text.strip().upper()
 
 
 def edit_distance(left: str, right: str) -> int:
@@ -58,32 +55,43 @@ def compute_workflow_metrics(
     predicted_status: Any,
     predicted_clean_text: Any,
 ) -> dict[str, Any]:
-    canonical_input = canonicalize_text(input_text)
-    canonical_reference = canonicalize_text(reference_text)
-    canonical_prediction = canonicalize_text(predicted_clean_text)
+    raw_input = '' if input_text is None else str(input_text)
+    raw_reference = '' if reference_text is None else str(reference_text)
+    raw_prediction = '' if predicted_clean_text is None else str(predicted_clean_text)
+
+    canonical_input = canonicalize_text(raw_input)
+    canonical_reference = canonicalize_text(raw_reference)
+    canonical_prediction = canonicalize_text(raw_prediction)
     normalized_reference_status = normalize_status(reference_status)
     normalized_prediction_status = normalize_status(predicted_status)
 
     status_match = normalized_prediction_status == normalized_reference_status
-    text_match = canonical_prediction == canonical_reference
-    workflow_success = status_match and text_match
+    text_exact_match = raw_prediction == raw_reference
+    text_canonical_match = canonical_prediction == canonical_reference
+    recipe_success = status_match and text_exact_match
 
-    d_input = edit_distance(canonical_input, canonical_reference)
-    d_pred = edit_distance(canonical_prediction, canonical_reference)
+    d_input = edit_distance(raw_input, raw_reference)
+    d_pred = edit_distance(raw_prediction, raw_reference)
     if d_input == 0:
         refinement_gain = 1.0 if d_pred == 0 else 0.0
     else:
-        refinement_gain = clamp((d_input - d_pred) / d_input, -1.0, 1.0)
+        refinement_gain = 1.0 - (d_pred / d_input)
 
     return {
+        'raw_input_text': raw_input,
+        'raw_reference_text': raw_reference,
+        'raw_predicted_clean_text': raw_prediction,
         'canonical_input_text': canonical_input,
         'canonical_reference_text': canonical_reference,
         'canonical_predicted_clean_text': canonical_prediction,
         'normalized_reference_status': normalized_reference_status,
         'normalized_predicted_status': normalized_prediction_status,
         'status_match': status_match,
-        'text_match': text_match,
-        'workflow_success': workflow_success,
+        'text_exact_match': text_exact_match,
+        'text_canonical_match': text_canonical_match,
+        'recipe_success': recipe_success,
+        'workflow_success': recipe_success,
+        'text_match': text_exact_match,
         'edit_distance_input_to_reference': d_input,
         'edit_distance_prediction_to_reference': d_pred,
         'refinement_gain': refinement_gain,
