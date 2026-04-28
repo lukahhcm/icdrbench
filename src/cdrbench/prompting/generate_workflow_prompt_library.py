@@ -872,7 +872,7 @@ def _failed_library_entry(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description='Generate and judge workflow-level CDR-Bench prompt libraries.')
+    parser = argparse.ArgumentParser(description='Generate and judge recipe-level CDR-Bench prompt libraries.')
     parser.add_argument('--benchmark-dir', default='data/benchmark')
     parser.add_argument('--output-dir', default='data/benchmark_prompts')
     parser.add_argument('--prompt-config', default='configs/workflow_prompting.yaml')
@@ -886,24 +886,24 @@ def main() -> None:
     parser.add_argument('--judge-api-key', default=None, help='Judge API key. Defaults to --api-key or OPENAI_API_KEY / DASHSCOPE_API_KEY env.')
     parser.add_argument('--temperature', type=float, default=0.8)
     parser.add_argument('--judge-temperature', type=float, default=0.0)
-    parser.add_argument('--variants-per-workflow', type=int, default=11, help='How many style presets to request per workflow.')
+    parser.add_argument('--variants-per-recipe', '--variants-per-workflow', dest='variants_per_workflow', type=int, default=11, help='How many style presets to request per recipe.')
     parser.add_argument('--candidates-per-style', type=int, default=3, help='How many prompt candidates to generate for each requested style.')
     parser.add_argument('--min-average-score', type=float, default=3.5)
     parser.add_argument(
         '--skip-operators',
         nargs='*',
         default=sorted(SKIPPED_OPERATORS),
-        help='Skip workflows containing these operators when generating prompt candidates.',
+        help='Skip recipes containing these operators when generating prompt candidates.',
     )
     parser.add_argument(
         '--cache-path',
-        default='data/benchmark_prompts/workflow_prompt_library_cache.jsonl',
-        help='Cache file for workflow-level prompt generation and judging.',
+        default='data/benchmark_prompts/recipe_prompt_library_cache.jsonl',
+        help='Cache file for recipe-level prompt generation and judging.',
     )
     parser.add_argument(
         '--resume',
         action='store_true',
-        help='Reuse workflow-level cache from --cache-path so interrupted runs can continue without regenerating finished workflows.',
+        help='Reuse recipe-level cache from --cache-path so interrupted runs can continue without regenerating finished recipes.',
     )
     args = parser.parse_args()
 
@@ -923,12 +923,12 @@ def main() -> None:
     cache_path = (ROOT / args.cache_path).resolve()
     if args.resume:
         cache = _load_cache(cache_path)
-        print(f'resume enabled: loaded {len(cache)} cached workflow prompt library entries from {cache_path}', flush=True)
+        print(f'resume enabled: loaded {len(cache)} cached recipe prompt library entries from {cache_path}', flush=True)
     else:
         cache = {}
         if cache_path.exists():
             cache_path.unlink()
-            print(f'resume disabled: cleared existing workflow prompt cache at {cache_path}', flush=True)
+            print(f'resume disabled: cleared existing recipe prompt cache at {cache_path}', flush=True)
 
     prompt_library_rows: list[dict[str, Any]] = []
     summary_rows: list[dict[str, Any]] = []
@@ -943,10 +943,10 @@ def main() -> None:
         grouped, skipped_count = _group_rows(rows, skipped_ops)
         track_generated_count = 0
         track_accepted_count = 0
-        accepted_workflow_count = 0
+        accepted_recipe_count = 0
         total_workflows = len(grouped)
         print(
-            f"start track={track} input_rows={len(rows)} workflows={total_workflows} skipped_rows={skipped_count}",
+            f"start track={track} input_rows={len(rows)} recipes={total_workflows} skipped_rows={skipped_count}",
             flush=True,
         )
 
@@ -1001,7 +1001,7 @@ def main() -> None:
                     source = args.prompt_source
                 except Exception as exc:
                     print(
-                        f"workflow failed; continuing track={track} workflow={workflow_key} error={exc}",
+                        f"recipe failed; continuing track={track} recipe={workflow_key} error={exc}",
                         flush=True,
                     )
                     library_entry = _failed_library_entry(
@@ -1022,9 +1022,9 @@ def main() -> None:
             track_generated_count += int(library_entry.get('generated_candidate_count', 0) or 0)
             track_accepted_count += int(library_entry.get('accepted_candidate_count', 0) or 0)
             if int(library_entry.get('accepted_candidate_count', 0) or 0) > 0:
-                accepted_workflow_count += 1
+                accepted_recipe_count += 1
             print(
-                f"progress track={track} workflow={workflow_index}/{total_workflows} "
+                f"progress track={track} recipe={workflow_index}/{total_workflows} "
                 f"source={source} accepted={library_entry.get('accepted_candidate_count', 0)} "
                 f"accepted_styles={library_entry.get('accepted_style_count', 0)} "
                 f"key={workflow_key}",
@@ -1037,8 +1037,11 @@ def main() -> None:
                 'input_rows': len(rows),
                 'skipped_rows': skipped_count,
                 'workflow_count': len(grouped),
-                'accepted_workflow_count': accepted_workflow_count,
+                'accepted_workflow_count': accepted_recipe_count,
+                'recipe_count': len(grouped),
+                'accepted_recipe_count': accepted_recipe_count,
                 'variants_per_workflow': args.variants_per_workflow,
+                'variants_per_recipe': args.variants_per_workflow,
                 'candidates_per_style': args.candidates_per_style,
                 'generated_candidate_count': track_generated_count,
                 'accepted_candidate_count': track_accepted_count,
@@ -1047,9 +1050,9 @@ def main() -> None:
             }
         )
 
-    _write_jsonl(output_dir / 'workflow_prompt_library.jsonl', prompt_library_rows)
+    _write_jsonl(output_dir / 'recipe_prompt_library.jsonl', prompt_library_rows)
     _write_jsonl(output_dir / 'prompt_generation_summary.jsonl', summary_rows)
-    print(f'wrote workflow prompt library -> {output_dir / "workflow_prompt_library.jsonl"}', flush=True)
+    print(f'wrote recipe prompt library -> {output_dir / "recipe_prompt_library.jsonl"}', flush=True)
     print(f'wrote summary -> {output_dir / "prompt_generation_summary.jsonl"}', flush=True)
 
 

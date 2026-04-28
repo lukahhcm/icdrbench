@@ -161,9 +161,9 @@ def _eval_row(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description='Build eval-ready prompt track files from an accepted workflow prompt library.')
+    parser = argparse.ArgumentParser(description='Build eval-ready prompt track files from an accepted recipe prompt library.')
     parser.add_argument('--benchmark-dir', default='data/benchmark')
-    parser.add_argument('--prompt-library', default='data/benchmark_prompts/workflow_prompt_library.jsonl')
+    parser.add_argument('--prompt-library', default='data/benchmark_prompts/recipe_prompt_library.jsonl')
     parser.add_argument('--output-dir', default='data/benchmark_prompts/eval')
     parser.add_argument('--tracks', nargs='*', default=list(TRACK_FILES), choices=sorted(TRACK_FILES))
     parser.add_argument('--prompt-variants-per-sample', type=int, default=3)
@@ -172,7 +172,7 @@ def main() -> None:
         '--min-prompt-variants-per-sample',
         type=int,
         default=3,
-        help='Skip samples whose workflow prompt pool cannot supply at least this many distinct styles.',
+        help='Skip samples whose recipe prompt pool cannot supply at least this many distinct styles.',
     )
     args = parser.parse_args()
 

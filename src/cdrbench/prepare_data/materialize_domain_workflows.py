@@ -55,8 +55,8 @@ EXPENSIVE_LONG_TEXT_MAPPERS = {
     'remove_words_with_incorrect_substrings_mapper',
 }
 DOMAIN_OUTPUT_FILES = [
-    'workflow_library.yaml',
-    'workflow_variants.csv',
+    'recipe_library.yaml',
+    'recipe_variants.csv',
     'filter_attachments.csv',
     'checkpoint_filter_stats.csv',
     'order_sensitivity_candidates.csv',
@@ -309,7 +309,9 @@ def _labeling_meta(record: dict[str, Any]) -> dict[str, Any]:
 
 
 def _workflow_rows_for_domain(domain_dir: Path) -> list[dict[str, Any]]:
-    workflow_csv = domain_dir / 'selected_workflows.csv'
+    workflow_csv = domain_dir / 'selected_recipes.csv'
+    if not workflow_csv.exists():
+        workflow_csv = domain_dir / 'selected_workflows.csv'
     if not workflow_csv.exists():
         return []
     df = pd.read_csv(workflow_csv)
@@ -326,7 +328,10 @@ def _domain_outputs_complete(domain_out_dir: Path) -> bool:
 
 def _load_domain_yaml(domain_out_dir: Path) -> dict[str, Any] | None:
     try:
-        with (domain_out_dir / 'workflow_library.yaml').open('r', encoding='utf-8') as f:
+        recipe_yaml = domain_out_dir / 'recipe_library.yaml'
+        workflow_yaml = domain_out_dir / 'workflow_library.yaml'
+        target_yaml = recipe_yaml if recipe_yaml.exists() else workflow_yaml
+        with target_yaml.open('r', encoding='utf-8') as f:
             payload = yaml.safe_load(f)
     except Exception:
         return None
@@ -751,9 +756,9 @@ def main() -> None:
         description='Materialize main and order-sensitivity workflow drafts from mined clean workflows.'
     )
     parser.add_argument('--domains-config', default='configs/domains.yaml')
-    parser.add_argument('--workflow-mining-dir', default='data/processed/workflow_mining')
+    parser.add_argument('--workflow-mining-dir', default='data/processed/recipe_mining')
     parser.add_argument('--filtered-path', default='data/processed/domain_filtered/all.jsonl')
-    parser.add_argument('--output-dir', default='data/processed/workflow_library')
+    parser.add_argument('--output-dir', default='data/processed/recipe_library')
     parser.add_argument('--max-support-records', type=int, default=128)
     parser.add_argument('--min-filter-support', type=int, default=5)
     parser.add_argument('--max-filters-per-workflow', type=int, default=3)
@@ -803,7 +808,7 @@ def main() -> None:
 
         workflow_rows = _workflow_rows_for_domain(domain_dir)
         if not workflow_rows:
-            _log(f'[{domain_index}/{len(domain_dirs)}] {domain}: no selected_workflows.csv rows; skip')
+            _log(f'[{domain_index}/{len(domain_dirs)}] {domain}: no selected_recipes.csv rows; skip')
             continue
 
         domain_records = records_by_domain.get(domain, [])
@@ -996,20 +1001,20 @@ def main() -> None:
 
         global_yaml['domains'][domain] = domain_yaml
         domain_out_dir.mkdir(parents=True, exist_ok=True)
-        with (domain_out_dir / 'workflow_library.yaml').open('w', encoding='utf-8') as f:
+        with (domain_out_dir / 'recipe_library.yaml').open('w', encoding='utf-8') as f:
             yaml.safe_dump(domain_yaml, f, sort_keys=False, allow_unicode=True)
-        pd.DataFrame(variant_rows).to_csv(domain_out_dir / 'workflow_variants.csv', index=False)
+        pd.DataFrame(variant_rows).to_csv(domain_out_dir / 'recipe_variants.csv', index=False)
         pd.DataFrame(attachment_rows).to_csv(domain_out_dir / 'filter_attachments.csv', index=False)
         pd.DataFrame(checkpoint_rows).to_csv(domain_out_dir / 'checkpoint_filter_stats.csv', index=False)
         pd.DataFrame(order_candidate_rows).to_csv(domain_out_dir / 'order_sensitivity_candidates.csv', index=False)
         pd.DataFrame(order_family_rows).to_csv(domain_out_dir / 'order_sensitivity_families.csv', index=False)
         _log(f'[{domain_index}/{len(domain_dirs)}] {domain}: wrote outputs -> {domain_out_dir}')
 
-    with (output_dir / 'workflow_library.yaml').open('w', encoding='utf-8') as f:
+    with (output_dir / 'recipe_library.yaml').open('w', encoding='utf-8') as f:
         yaml.safe_dump(global_yaml, f, sort_keys=False, allow_unicode=True)
-    pd.DataFrame(summary_rows).to_csv(output_dir / 'workflow_library_summary.csv', index=False)
+    pd.DataFrame(summary_rows).to_csv(output_dir / 'recipe_library_summary.csv', index=False)
 
-    print(f'wrote workflow library -> {output_dir}')
+    print(f'wrote recipe library -> {output_dir}')
 
 
 if __name__ == '__main__':

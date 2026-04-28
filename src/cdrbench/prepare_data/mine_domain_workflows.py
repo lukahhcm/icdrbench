@@ -351,7 +351,7 @@ def _build_domain_report(
         'notes': [
             'Bottom-up mining is based on active operator sets from tagging outputs.',
             f'Concrete workflows are only kept if support >= {min_workflow_support}.',
-            'Fallback workflow candidates are reported for inspection but excluded from selected_workflows.csv.',
+            'Fallback recipe candidates are reported for inspection but excluded from selected_recipes.csv.',
             'Concrete workflow candidates still need manual ordering and activation-spec curation.',
         ],
     }
@@ -371,7 +371,7 @@ def main() -> None:
     )
     parser.add_argument('--tagged-dir', default='data/processed/domain_tags')
     parser.add_argument('--domains-config', default='configs/domains.yaml')
-    parser.add_argument('--output-dir', default='data/processed/workflow_mining')
+    parser.add_argument('--output-dir', default='data/processed/recipe_mining')
     parser.add_argument('--domain-field', choices=['assigned_domain', 'best_domain_candidate'], default='assigned_domain')
     parser.add_argument('--min-active-mappers', type=int, default=2)
     parser.add_argument('--min-support', type=int, default=5)
@@ -382,6 +382,12 @@ def main() -> None:
     parser.add_argument('--top-k', type=int, default=50)
     parser.add_argument('--max-families-per-domain', type=int, default=6)
     parser.add_argument('--max-workflows-per-family', type=int, default=8)
+    parser.add_argument(
+        '--max-text-length',
+        type=int,
+        default=0,
+        help='Skip tagged records whose text length exceeds this threshold. 0 disables the filter.',
+    )
     args = parser.parse_args()
 
     root = ROOT
@@ -395,12 +401,20 @@ def main() -> None:
     domains_cfg = load_domains_config(root / args.domains_config)
     domain_defs = domains_cfg.get('domains', {})
     records_by_domain: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    skipped_for_length = 0
 
     for path in sorted(tagged_dir.glob('*.jsonl')):
         for row in iter_jsonl(path):
             active_count = int(row.get('active_mapper_count', 0) or 0)
             if active_count < args.min_active_mappers:
                 continue
+            if args.max_text_length > 0:
+                text_length = row.get('text_length')
+                if not isinstance(text_length, int):
+                    text_length = len(str(row.get('text', '')))
+                if int(text_length) > args.max_text_length:
+                    skipped_for_length += 1
+                    continue
             domain = row.get(args.domain_field)
             if not domain:
                 continue
@@ -428,18 +442,18 @@ def main() -> None:
 
         domain_dir = output_dir / domain
         domain_dir.mkdir(parents=True, exist_ok=True)
-        (domain_dir / 'workflow_candidates.json').write_text(
+        (domain_dir / 'recipe_candidates.json').write_text(
             json.dumps(report, ensure_ascii=False, indent=2),
             encoding='utf-8',
         )
-        (domain_dir / 'workflow_candidates.yaml').write_text(
+        (domain_dir / 'recipe_candidates.yaml').write_text(
             yaml.safe_dump(report, allow_unicode=True, sort_keys=False),
             encoding='utf-8',
         )
         exact_df.to_csv(domain_dir / 'exact_signatures.csv', index=False)
         subset_df.to_csv(domain_dir / 'frequent_operator_sets.csv', index=False)
-        family_df.to_csv(domain_dir / 'workflow_families.csv', index=False)
-        workflow_df.to_csv(domain_dir / 'selected_workflows.csv', index=False)
+        family_df.to_csv(domain_dir / 'recipe_families.csv', index=False)
+        workflow_df.to_csv(domain_dir / 'selected_recipes.csv', index=False)
 
         global_yaml['domains'][domain] = {
             'description': report['description'],
@@ -452,6 +466,7 @@ def main() -> None:
             {
                 'domain': domain,
                 'num_records': report['num_records'],
+                'max_text_length': args.max_text_length,
                 'active_operator_inventory_size': len(report['active_operator_inventory']),
                 'num_exact_signature_candidates': len(exact_df),
                 'num_frequent_operator_sets': len(subset_df),
@@ -470,12 +485,15 @@ def main() -> None:
     if not summary_rows:
         raise SystemExit('no domain records found for workflow mining')
 
-    pd.DataFrame(summary_rows).to_csv(output_dir / 'domain_workflow_mining_summary.csv', index=False)
-    (output_dir / 'workflow_candidates.yaml').write_text(
+    pd.DataFrame(summary_rows).to_csv(output_dir / 'domain_recipe_mining_summary.csv', index=False)
+    (output_dir / 'recipe_candidates.yaml').write_text(
         yaml.safe_dump(global_yaml, allow_unicode=True, sort_keys=False),
         encoding='utf-8',
     )
-    print(f'wrote workflow mining outputs -> {output_dir}')
+    print(
+        f'wrote workflow mining outputs -> {output_dir} '
+        f'(skipped_for_length={skipped_for_length}, max_text_length={args.max_text_length})'
+    )
 
 
 if __name__ == '__main__':

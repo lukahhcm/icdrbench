@@ -105,7 +105,7 @@ def _draw_donut(ax, series: pd.Series, title: str, colors: list[str] | None = No
 def main() -> None:
     parser = argparse.ArgumentParser(description="Plot benchmark composition charts for paper-ready inspection.")
     parser.add_argument("--benchmark-dir", default="data/benchmark")
-    parser.add_argument("--workflow-library-dir", default="data/processed/workflow_library")
+    parser.add_argument("--workflow-library-dir", default="data/processed/recipe_library")
     parser.add_argument("--output-dir", default="data/paper_stats/plots")
     args = parser.parse_args()
 
@@ -114,7 +114,10 @@ def main() -> None:
     output_dir = (ROOT / args.output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    workflow_summary = _load_csv_frame(workflow_library_dir / "workflow_library_summary.csv")
+    summary_path = workflow_library_dir / "recipe_library_summary.csv"
+    if not summary_path.exists():
+        summary_path = workflow_library_dir / "workflow_library_summary.csv"
+    workflow_summary = _load_csv_frame(summary_path)
     main_df = _load_jsonl_frame(benchmark_dir / "main.jsonl")
     order_df = _load_jsonl_frame(benchmark_dir / "order_sensitivity.jsonl")
     atomic_df = _load_jsonl_frame(benchmark_dir / "atomic_ops.jsonl")
@@ -146,7 +149,7 @@ def main() -> None:
     fig, axes = plt.subplots(2, 4, figsize=(20, 10), constrained_layout=True)
     fig.suptitle("CDR-Bench Composition Overview", fontsize=18, fontweight="bold")
 
-    _draw_donut(axes[0, 0], workflow_domains, "Workflow Library Domains", palette)
+    _draw_donut(axes[0, 0], workflow_domains, "Recipe Library Domains", palette)
     _draw_donut(axes[0, 1], main_domains, "Main Track by Domain", palette)
     _draw_donut(axes[0, 2], main_types, "Main Track by Workflow Type", palette)
     _draw_donut(axes[0, 3], main_status, "Main Variant Status", status_palette)
@@ -162,7 +165,7 @@ def main() -> None:
     plt.close(fig)
 
     summary_payload = {
-        "workflow_library_domains": _counts_to_records(workflow_domains, "domain"),
+        "recipe_library_domains": _counts_to_records(workflow_domains, "domain"),
         "main_domains": _counts_to_records(main_domains, "domain"),
         "main_workflow_types": _counts_to_records(main_types, "workflow_type"),
         "main_variant_status": _counts_to_records(main_status, "status"),
@@ -176,7 +179,7 @@ def main() -> None:
         encoding="utf-8",
     )
 
-    pd.DataFrame(_counts_to_records(workflow_domains, "domain")).to_csv(output_dir / "workflow_library_domains.csv", index=False)
+    pd.DataFrame(_counts_to_records(workflow_domains, "domain")).to_csv(output_dir / "recipe_library_domains.csv", index=False)
     pd.DataFrame(_counts_to_records(main_domains, "domain")).to_csv(output_dir / "main_domains.csv", index=False)
     pd.DataFrame(_counts_to_records(main_types, "workflow_type")).to_csv(output_dir / "main_workflow_types.csv", index=False)
     pd.DataFrame(_counts_to_records(main_status, "status")).to_csv(output_dir / "main_variant_status.csv", index=False)

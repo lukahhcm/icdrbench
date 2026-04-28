@@ -101,40 +101,40 @@ Notes:
 - `extract_tables_from_html_mapper` writes deterministic TSV text back into `text`.
 - `latex_figure_context_extractor_mapper` writes merged figure-context text back into `text`.
 
-## 5. Mine Workflow Candidates
+## 5. Mine Recipe Candidates
 
 ```bash
 PYTHONPATH=src .venv-ops/bin/python -m cdrbench.prepare_data.mine_domain_workflows \
   --tagged-dir data/processed/domain_tags \
-  --output-dir data/processed/workflow_mining
+  --output-dir data/processed/recipe_mining
 ```
 
-By default, a concrete workflow candidate needs at least `5` supporting samples. Adjust this with `--min-workflow-support`.
+By default, a concrete recipe candidate needs at least `5` supporting samples. Adjust this with `--min-workflow-support`.
 
 Key outputs:
 
-- `data/processed/workflow_mining/<domain>/workflow_families.csv`
-- `data/processed/workflow_mining/<domain>/selected_workflows.csv`
-- `data/processed/workflow_mining/<domain>/workflow_candidates.yaml`
-- `data/processed/workflow_mining/domain_workflow_mining_summary.csv`
+- `data/processed/recipe_mining/<domain>/recipe_families.csv`
+- `data/processed/recipe_mining/<domain>/selected_recipes.csv`
+- `data/processed/recipe_mining/<domain>/recipe_candidates.yaml`
+- `data/processed/recipe_mining/domain_recipe_mining_summary.csv`
 
 Quick inspection:
 
 ```bash
-column -s, -t < data/processed/workflow_mining/domain_workflow_mining_summary.csv | less -S
-column -s, -t < data/processed/workflow_mining/web/selected_workflows.csv | less -S
-sed -n '1,160p' data/processed/workflow_mining/web/workflow_candidates.yaml
+column -s, -t < data/processed/recipe_mining/domain_recipe_mining_summary.csv | less -S
+column -s, -t < data/processed/recipe_mining/web/selected_recipes.csv | less -S
+sed -n '1,160p' data/processed/recipe_mining/web/recipe_candidates.yaml
 ```
 
-Fallback workflow candidates are kept for inspection but excluded from benchmark materialization.
+Fallback recipe candidates are kept for inspection but excluded from benchmark materialization.
 
-## 6. Materialize Workflow Libraries
+## 6. Materialize Recipe Libraries
 
 ```bash
 PYTHONPATH=src .venv-ops/bin/python -m cdrbench.prepare_data.materialize_domain_workflows \
-  --workflow-mining-dir data/processed/workflow_mining \
+  --workflow-mining-dir data/processed/recipe_mining \
   --filtered-path data/processed/domain_filtered/all.jsonl \
-  --output-dir data/processed/workflow_library \
+  --output-dir data/processed/recipe_library \
   --resume
 ```
 
@@ -159,26 +159,26 @@ Order-sensitivity families:
 
 Key outputs:
 
-- `data/processed/workflow_library/<domain>/workflow_library.yaml`
-- `data/processed/workflow_library/<domain>/workflow_variants.csv`
-- `data/processed/workflow_library/<domain>/filter_attachments.csv`
-- `data/processed/workflow_library/<domain>/checkpoint_filter_stats.csv`
-- `data/processed/workflow_library/<domain>/order_sensitivity_families.csv`
-- `data/processed/workflow_library/workflow_library_summary.csv`
+- `data/processed/recipe_library/<domain>/recipe_library.yaml`
+- `data/processed/recipe_library/<domain>/recipe_variants.csv`
+- `data/processed/recipe_library/<domain>/filter_attachments.csv`
+- `data/processed/recipe_library/<domain>/checkpoint_filter_stats.csv`
+- `data/processed/recipe_library/<domain>/order_sensitivity_families.csv`
+- `data/processed/recipe_library/recipe_library_summary.csv`
 
 Useful checks:
 
 ```bash
-column -s, -t < data/processed/workflow_library/workflow_library_summary.csv | less -S
-column -s, -t < data/processed/workflow_library/web/workflow_variants.csv | less -S
-column -s, -t < data/processed/workflow_library/web/checkpoint_filter_stats.csv | less -S
+column -s, -t < data/processed/recipe_library/recipe_library_summary.csv | less -S
+column -s, -t < data/processed/recipe_library/web/recipe_variants.csv | less -S
+column -s, -t < data/processed/recipe_library/web/checkpoint_filter_stats.csv | less -S
 ```
 
 ## 7. Generate Benchmark Instances and GT
 
 ```bash
 PYTHONPATH=src .venv-ops/bin/python -m cdrbench.prepare_data.materialize_benchmark_instances \
-  --workflow-library-dir data/processed/workflow_library \
+  --workflow-library-dir data/processed/recipe_library \
   --filtered-path data/processed/domain_filtered/all.jsonl \
   --output-dir data/benchmark \
   --target-drop-rate 0.5 \
@@ -281,7 +281,7 @@ If you want a quick paper-style overview of what the benchmark is made of, gener
 ```bash
 PYTHONPATH=src .venv-ops/bin/python -m cdrbench.reporting.plot_benchmark_composition \
   --benchmark-dir data/benchmark \
-  --workflow-library-dir data/processed/workflow_library \
+  --workflow-library-dir data/processed/recipe_library \
   --output-dir data/paper_stats/plots
 ```
 
@@ -492,15 +492,15 @@ Each track writes:
 
 Outputs:
 
-- `data/benchmark_prompts/atomic_ops/workflow_prompt_library.jsonl`
+- `data/benchmark_prompts/atomic_ops/recipe_prompt_library.jsonl`
 - `data/benchmark_prompts/atomic_ops/prompt_generation_summary.jsonl`
 - `data/benchmark_prompts/atomic_ops/eval/atomic_ops.jsonl`
 - `data/benchmark_prompts/atomic_ops/eval/prompt_eval_build_summary.jsonl`
-- `data/benchmark_prompts/main/workflow_prompt_library.jsonl`
+- `data/benchmark_prompts/main/recipe_prompt_library.jsonl`
 - `data/benchmark_prompts/main/prompt_generation_summary.jsonl`
 - `data/benchmark_prompts/main/eval/main.jsonl`
 - `data/benchmark_prompts/main/eval/prompt_eval_build_summary.jsonl`
-- `data/benchmark_prompts/order_sensitivity/workflow_prompt_library.jsonl`
+- `data/benchmark_prompts/order_sensitivity/recipe_prompt_library.jsonl`
 - `data/benchmark_prompts/order_sensitivity/prompt_generation_summary.jsonl`
 - `data/benchmark_prompts/order_sensitivity/eval/order_sensitivity.jsonl`
 - `data/benchmark_prompts/order_sensitivity/eval/prompt_eval_build_summary.jsonl`
@@ -522,7 +522,7 @@ This means natural-language diversity comes from the requirement body, while the
 
 The default generation flow hides operator names and parameter names from the user-facing requirement, while still preserving:
 
-- `data/processed/workflow_library/<domain>/workflow_library.yaml`
+- `data/processed/recipe_library/<domain>/recipe_library.yaml`
 - `configs/workflow_prompting.yaml`
 - `data/benchmark/*.jsonl`
 

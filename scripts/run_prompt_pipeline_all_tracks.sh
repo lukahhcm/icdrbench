@@ -12,7 +12,7 @@ This script runs the full prompt pipeline sequentially for:
   3. order_sensitivity
 
 For each track it will:
-  1. generate workflow-level prompt candidates
+  1. generate recipe-level prompt candidates
   2. judge/check the accepted prompt pool
   3. build eval-ready sample files by combining prompts with benchmark rows
   4. check the eval output summary
@@ -22,7 +22,7 @@ Options:
   --output-root <path>                    Root output directory. Default: data/benchmark_prompts
   --prompt-config <path>                  Prompt config YAML. Default: configs/workflow_prompting.yaml
   --prompt-source <llm|template>          Prompt source. Default: llm
-  --variants-per-workflow <int>           Style presets requested per workflow. Default: 11
+  --variants-per-recipe <int>             Style presets requested per recipe. Default: 11
   --candidates-per-style <int>            Candidate prompts generated per style. Default: 3
   --prompt-variants-per-sample <int>      Distinct styles sampled per eval sample. Default: 3
   --prompt-sampling-seed <int>            Deterministic sampling seed. Default: 0
@@ -35,7 +35,7 @@ Options:
   --judge-base-url <url>                  Judge base URL override
   --judge-api-key <key>                   Judge API key override
   --python-bin <path>                     Python executable. Default: .venv-ops/bin/python or python3
-  --no-resume                             Disable workflow-level resume cache reuse
+  --no-resume                             Disable recipe-level resume cache reuse
   -h, --help                              Show this help
 
 Examples:
@@ -56,7 +56,7 @@ BENCHMARK_DIR="data/benchmark"
 OUTPUT_ROOT="data/benchmark_prompts"
 PROMPT_CONFIG="configs/workflow_prompting.yaml"
 PROMPT_SOURCE="llm"
-VARIANTS_PER_WORKFLOW=11
+VARIANTS_PER_RECIPE=11
 CANDIDATES_PER_STYLE=3
 PROMPT_VARIANTS_PER_SAMPLE=3
 PROMPT_SAMPLING_SEED=0
@@ -94,8 +94,8 @@ while [[ $# -gt 0 ]]; do
       PROMPT_SOURCE="$2"
       shift 2
       ;;
-    --variants-per-workflow)
-      VARIANTS_PER_WORKFLOW="$2"
+    --variants-per-recipe|--variants-per-workflow)
+      VARIANTS_PER_RECIPE="$2"
       shift 2
       ;;
     --candidates-per-style)
@@ -210,18 +210,18 @@ entry = next((row for row in rows if row.get('track') == track), None)
 if entry is None:
     raise SystemExit(f"No generation summary row found for track={track} in {summary_path}")
 
-accepted_workflow_count = int(entry.get('accepted_workflow_count', 0) or 0)
+accepted_recipe_count = int(entry.get('accepted_recipe_count', entry.get('accepted_workflow_count', 0)) or 0)
 accepted_candidate_count = int(entry.get('accepted_candidate_count', 0) or 0)
 print(
     f"[check:generation] {track}: "
     f"input_rows={entry.get('input_rows', 0)} "
-    f"workflows={entry.get('workflow_count', 0)} "
-    f"accepted_workflows={accepted_workflow_count} "
+    f"recipes={entry.get('recipe_count', entry.get('workflow_count', 0))} "
+    f"accepted_recipes={accepted_recipe_count} "
     f"accepted_candidates={accepted_candidate_count} "
     f"skipped_rows={entry.get('skipped_rows', 0)}",
     flush=True,
 )
-if accepted_workflow_count <= 0 or accepted_candidate_count <= 0:
+if accepted_recipe_count <= 0 or accepted_candidate_count <= 0:
     raise SystemExit(f"Prompt pool check failed for {track}: no accepted prompts were saved.")
 PY
 }
@@ -266,8 +266,8 @@ run_track() {
   require_file "$PROMPT_CONFIG"
 
   local track_output_dir="$OUTPUT_ROOT/$track"
-  local cache_path="$track_output_dir/workflow_prompt_library_cache.jsonl"
-  local library_path="$track_output_dir/workflow_prompt_library.jsonl"
+  local cache_path="$track_output_dir/recipe_prompt_library_cache.jsonl"
+  local library_path="$track_output_dir/recipe_prompt_library.jsonl"
   local eval_output_dir="$track_output_dir/eval"
 
   mkdir -p "$track_output_dir" "$eval_output_dir"
@@ -280,7 +280,7 @@ run_track() {
     --prompt-config "$PROMPT_CONFIG"
     --prompt-source "$PROMPT_SOURCE"
     --tracks "$track"
-    --variants-per-workflow "$VARIANTS_PER_WORKFLOW"
+    --variants-per-recipe "$VARIANTS_PER_RECIPE"
     --candidates-per-style "$CANDIDATES_PER_STYLE"
     --cache-path "$cache_path"
   )

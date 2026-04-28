@@ -159,11 +159,9 @@ def _within_input_char_limit(record: dict[str, Any], max_input_chars: int) -> bo
 def _input_length_bucket(input_length_chars: int) -> str:
     if input_length_chars <= 4_000:
         return 'short'
-    if input_length_chars <= 16_000:
+    if input_length_chars <= 8_000:
         return 'medium'
-    if input_length_chars <= 50_000:
-        return 'long'
-    return 'very_long'
+    return 'long'
 
 
 def _candidate_limit(max_records: int) -> int | None:
@@ -421,7 +419,10 @@ def _mark_source_usage(rows: Iterable[dict[str, Any]], source_usage_counts: dict
 
 def _load_domain_workflows(workflow_library_dir: Path) -> dict[str, dict[str, Any]]:
     workflows = {}
-    for path in sorted(workflow_library_dir.glob('*/workflow_library.yaml')):
+    paths = sorted(workflow_library_dir.glob('*/recipe_library.yaml'))
+    if not paths:
+        paths = sorted(workflow_library_dir.glob('*/workflow_library.yaml'))
+    for path in paths:
         with path.open('r', encoding='utf-8') as f:
             payload = yaml.safe_load(f)
         if isinstance(payload, dict) and payload.get('domain'):
@@ -956,9 +957,9 @@ def _materialize_order_family(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description='Materialize benchmark instances and DJ references without prompts.')
+    parser = argparse.ArgumentParser(description='Materialize benchmark instances and deterministic references without prompts.')
     parser.add_argument('--domains-config', default='configs/domains.yaml')
-    parser.add_argument('--workflow-library-dir', default='data/processed/workflow_library')
+    parser.add_argument('--workflow-library-dir', default='data/processed/recipe_library')
     parser.add_argument('--filtered-path', default='data/processed/domain_filtered/all.jsonl')
     parser.add_argument('--output-dir', default='data/benchmark')
     parser.add_argument('--max-candidate-records', type=int, default=0, help='Candidate cap per workflow/order family; 0 means no cap.')
@@ -1005,7 +1006,7 @@ def main() -> None:
     cache_dir = output_dir / '_materialize_cache_v2'
 
     if not workflow_library_dir.exists():
-        raise SystemExit(f'workflow library dir not found: {workflow_library_dir}')
+        raise SystemExit(f'recipe library dir not found: {workflow_library_dir}')
     if not filtered_path.exists():
         raise SystemExit(f'filtered corpus not found: {filtered_path}')
     if not 0.0 < args.target_drop_rate < 1.0:
@@ -1036,7 +1037,7 @@ def main() -> None:
     )
 
     domain_workflows = _load_domain_workflows(workflow_library_dir)
-    _log(f'loaded workflow libraries for {len(domain_workflows)} domains -> {workflow_library_dir}')
+    _log(f'loaded recipe libraries for {len(domain_workflows)} domains -> {workflow_library_dir}')
 
     main_rows: list[dict[str, Any]] = []
     order_rows: list[dict[str, Any]] = []

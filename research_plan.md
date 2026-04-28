@@ -261,10 +261,10 @@ By default, a concrete workflow candidate must have at least five supporting sam
 
 Primary outputs:
 
-- `data/processed/workflow_mining/<domain>/selected_workflows.csv`
-- `data/processed/workflow_mining/<domain>/workflow_families.csv`
-- `data/processed/workflow_mining/<domain>/workflow_candidates.yaml`
-- `data/processed/workflow_mining/domain_workflow_mining_summary.csv`
+- `data/processed/recipe_mining/<domain>/selected_recipes.csv`
+- `data/processed/recipe_mining/<domain>/recipe_families.csv`
+- `data/processed/recipe_mining/<domain>/recipe_candidates.yaml`
+- `data/processed/recipe_mining/domain_recipe_mining_summary.csv`
 
 Methodologically, this stage is what keeps the benchmark from becoming a hand-written list of arbitrary operator recipes. The main workflow pool is data-supported.
 
@@ -295,12 +295,12 @@ The workflow library stage produces:
 
 Primary outputs:
 
-- `data/processed/workflow_library/<domain>/workflow_library.yaml`
-- `data/processed/workflow_library/<domain>/workflow_variants.csv`
-- `data/processed/workflow_library/<domain>/filter_attachments.csv`
-- `data/processed/workflow_library/<domain>/checkpoint_filter_stats.csv`
-- `data/processed/workflow_library/<domain>/order_sensitivity_families.csv`
-- `data/processed/workflow_library/workflow_library_summary.csv`
+- `data/processed/recipe_library/<domain>/recipe_library.yaml`
+- `data/processed/recipe_library/<domain>/recipe_variants.csv`
+- `data/processed/recipe_library/<domain>/filter_attachments.csv`
+- `data/processed/recipe_library/<domain>/checkpoint_filter_stats.csv`
+- `data/processed/recipe_library/<domain>/order_sensitivity_families.csv`
+- `data/processed/recipe_library/recipe_library_summary.csv`
 
 ### 7.5 Stage 5: Benchmark Instance Materialization and Deterministic References
 
@@ -381,7 +381,7 @@ Each generated candidate is then judged for:
 
 Primary outputs:
 
-- `data/benchmark_prompts/<track>/workflow_prompt_library.jsonl`
+- `data/benchmark_prompts/<track>/recipe_prompt_library.jsonl`
 - `data/benchmark_prompts/<track>/prompt_generation_summary.jsonl`
 
 ### 7.7 Stage 7: Eval-Ready Prompt Track Construction
