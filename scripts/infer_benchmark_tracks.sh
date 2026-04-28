@@ -25,6 +25,7 @@ Options:
   --max-samples <int>                  Optional cap for smoke tests. Default: 0 (all)
   --temperature <float>                Default: 0.0
   --max-tokens <int>                   Default: 4096
+  --progress-every <int>               Default: 20
   --resume                             Resume missing prompt variants from existing outputs
   -h, --help                           Show this help
 
@@ -62,6 +63,7 @@ PROMPT_VARIANT_INDICES="all"
 MAX_SAMPLES="0"
 TEMPERATURE="0.0"
 MAX_TOKENS="4096"
+PROGRESS_EVERY="20"
 RESUME="false"
 
 while [[ $# -gt 0 ]]; do
@@ -104,6 +106,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --max-tokens)
       MAX_TOKENS="$2"
+      shift 2
+      ;;
+    --progress-every)
+      PROGRESS_EVERY="$2"
       shift 2
       ;;
     --resume)
@@ -166,6 +172,7 @@ for track in "${TRACKS[@]}"; do
     --max-samples "$MAX_SAMPLES"
     --temperature "$TEMPERATURE"
     --max-tokens "$MAX_TOKENS"
+    --progress-every "$PROGRESS_EVERY"
   )
   if [[ -n "$BASE_URL" ]]; then
     cmd+=(--base-url "$BASE_URL")

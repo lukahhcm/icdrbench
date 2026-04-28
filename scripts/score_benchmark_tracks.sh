@@ -24,6 +24,8 @@ Options:
   --prediction-instance-field <key>   Default: instance_id
   --prediction-status-field <key>     Optional override for prediction status field
   --prediction-text-field <key>       Optional override for prediction clean-text field
+  --progress-every <int>              Default: 20
+  --resume                            Resume scoring from existing output-dir files
   -h, --help                          Show this help
 
 Examples:
@@ -58,6 +60,8 @@ BASE_URL=""
 PREDICTION_INSTANCE_FIELD="instance_id"
 PREDICTION_STATUS_FIELD=""
 PREDICTION_TEXT_FIELD=""
+PROGRESS_EVERY="20"
+RESUME="false"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -96,6 +100,14 @@ while [[ $# -gt 0 ]]; do
     --prediction-text-field)
       PREDICTION_TEXT_FIELD="$2"
       shift 2
+      ;;
+    --progress-every)
+      PROGRESS_EVERY="$2"
+      shift 2
+      ;;
+    --resume)
+      RESUME="true"
+      shift 1
       ;;
     -h|--help)
       usage
@@ -151,6 +163,7 @@ for track in "${TRACKS[@]}"; do
     --benchmark-path "$benchmark_path"
     --output-dir "$output_dir"
     --prediction-instance-field "$PREDICTION_INSTANCE_FIELD"
+    --progress-every "$PROGRESS_EVERY"
   )
   if [[ -n "$MODEL" ]]; then
     cmd+=(--model "$MODEL")
@@ -163,6 +176,9 @@ for track in "${TRACKS[@]}"; do
   fi
   if [[ -n "$PREDICTION_TEXT_FIELD" ]]; then
     cmd+=(--prediction-text-field "$PREDICTION_TEXT_FIELD")
+  fi
+  if [[ "$RESUME" == "true" ]]; then
+    cmd+=(--resume)
   fi
 
   echo "[run] track=$track step=score output_dir=$output_dir"

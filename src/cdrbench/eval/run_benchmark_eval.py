@@ -359,6 +359,15 @@ def _existing_variant_prediction_map(row: dict[str, Any]) -> dict[int, dict[str,
     return mapping
 
 
+def _group_rows_by_instance_id(rows: list[dict[str, Any]], key: str = 'instance_id') -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        instance_id = str(row.get(key) or '')
+        if instance_id:
+            grouped.setdefault(instance_id, []).append(row)
+    return grouped
+
+
 def _safe_mean(values: list[float]) -> float:
     return sum(values) / len(values) if values else 0.0
 
@@ -818,13 +827,29 @@ def _score(args: argparse.Namespace) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     prediction_rows = _read_jsonl(predictions_path)
 
+    existing_instance_rows_by_id: dict[str, dict[str, Any]] = {}
+    existing_variant_rows_by_id: dict[str, list[dict[str, Any]]] = {}
+    instance_metrics_path = output_dir / 'instance_metrics.jsonl'
+    scored_variant_predictions_path = output_dir / 'scored_variant_predictions.jsonl'
+    if args.resume:
+        if instance_metrics_path.exists():
+            for row in _read_jsonl(instance_metrics_path):
+                instance_id = str(row.get('instance_id') or '')
+                if instance_id:
+                    existing_instance_rows_by_id[instance_id] = row
+        if scored_variant_predictions_path.exists():
+            existing_variant_rows_by_id = _group_rows_by_instance_id(_read_jsonl(scored_variant_predictions_path))
+
     scored_variant_rows: list[dict[str, Any]] = []
+    instance_rows: list[dict[str, Any]] = []
+    reused_instance_count = 0
+    new_instance_count = 0
+    started = time.time()
     if args.benchmark_path:
         benchmark_rows = _read_jsonl((ROOT / args.benchmark_path).resolve())
         benchmark_map = {str(row.get('instance_id') or ''): row for row in benchmark_rows if row.get('instance_id')}
         unexpected_prediction_count = 0
         seen_prediction_ids = set()
-        instance_rows = []
         missing_prediction_count = 0
 
         for prediction_row in prediction_rows:
@@ -836,6 +861,20 @@ def _score(args: argparse.Namespace) -> None:
 
         for benchmark_row in benchmark_rows:
             instance_id = str(benchmark_row.get('instance_id') or '')
+            if args.resume and instance_id in existing_instance_rows_by_id:
+                instance_rows.append(existing_instance_rows_by_id[instance_id])
+                scored_variant_rows.extend(existing_variant_rows_by_id.get(instance_id, []))
+                reused_instance_count += 1
+                current_count = reused_instance_count + new_instance_count
+                if current_count % args.progress_every == 0 or current_count == len(benchmark_rows):
+                    elapsed = time.time() - started
+                    print(
+                        f'progress score instance={current_count}/{len(benchmark_rows)} '
+                        f'reused_instances={reused_instance_count} new_instances={new_instance_count} '
+                        f'elapsed_sec={elapsed:.1f}',
+                        flush=True,
+                    )
+                continue
             prediction_row = next(
                 (row for row in prediction_rows if str(row.get(args.prediction_instance_field) or '') == instance_id),
                 None,
@@ -853,6 +892,16 @@ def _score(args: argparse.Namespace) -> None:
                     'missing_prediction': True,
                 }
                 instance_rows.append(instance_row)
+                new_instance_count += 1
+                current_count = reused_instance_count + new_instance_count
+                if current_count % args.progress_every == 0 or current_count == len(benchmark_rows):
+                    elapsed = time.time() - started
+                    print(
+                        f'progress score instance={current_count}/{len(benchmark_rows)} '
+                        f'reused_instances={reused_instance_count} new_instances={new_instance_count} '
+                        f'elapsed_sec={elapsed:.1f}',
+                        flush=True,
+                    )
                 continue
 
             merged_row = {**benchmark_row, **prediction_row}
@@ -865,6 +914,16 @@ def _score(args: argparse.Namespace) -> None:
             instance_row = _aggregate_instance_metrics(benchmark_row, instance_variant_rows)
             instance_row['missing_prediction'] = False
             instance_rows.append(instance_row)
+            new_instance_count += 1
+            current_count = reused_instance_count + new_instance_count
+            if current_count % args.progress_every == 0 or current_count == len(benchmark_rows):
+                elapsed = time.time() - started
+                print(
+                    f'progress score instance={current_count}/{len(benchmark_rows)} '
+                    f'reused_instances={reused_instance_count} new_instances={new_instance_count} '
+                    f'elapsed_sec={elapsed:.1f}',
+                    flush=True,
+                )
 
         order_group_rows = _build_order_group_rows(instance_rows)
         summary = _build_instance_summary(
@@ -878,8 +937,23 @@ def _score(args: argparse.Namespace) -> None:
         summary['missing_prediction_count'] = missing_prediction_count
         summary['unexpected_prediction_count'] = unexpected_prediction_count
     else:
-        instance_rows = []
-        for prediction_row in prediction_rows:
+        total_rows = len(prediction_rows)
+        for index, prediction_row in enumerate(prediction_rows, start=1):
+            instance_id = str(prediction_row.get(args.prediction_instance_field) or prediction_row.get('instance_id') or '')
+            if args.resume and instance_id in existing_instance_rows_by_id:
+                instance_rows.append(existing_instance_rows_by_id[instance_id])
+                scored_variant_rows.extend(existing_variant_rows_by_id.get(instance_id, []))
+                reused_instance_count += 1
+                current_count = reused_instance_count + new_instance_count
+                if current_count % args.progress_every == 0 or current_count == total_rows:
+                    elapsed = time.time() - started
+                    print(
+                        f'progress score instance={current_count}/{total_rows} '
+                        f'reused_instances={reused_instance_count} new_instances={new_instance_count} '
+                        f'elapsed_sec={elapsed:.1f}',
+                        flush=True,
+                    )
+                continue
             instance_variant_rows = _score_rows_from_inference_row(
                 prediction_row,
                 explicit_status_field=args.prediction_status_field,
@@ -887,6 +961,16 @@ def _score(args: argparse.Namespace) -> None:
             )
             scored_variant_rows.extend(instance_variant_rows)
             instance_rows.append(_aggregate_instance_metrics(prediction_row, instance_variant_rows))
+            new_instance_count += 1
+            current_count = reused_instance_count + new_instance_count
+            if current_count % args.progress_every == 0 or current_count == total_rows:
+                elapsed = time.time() - started
+                print(
+                    f'progress score instance={current_count}/{total_rows} '
+                    f'reused_instances={reused_instance_count} new_instances={new_instance_count} '
+                    f'elapsed_sec={elapsed:.1f}',
+                    flush=True,
+                )
         order_group_rows = _build_order_group_rows(instance_rows)
         summary = _build_instance_summary(
             instance_rows,
@@ -960,6 +1044,8 @@ def main() -> None:
     score_parser.add_argument('--prediction-text-field', default=None)
     score_parser.add_argument('--model', default=None)
     score_parser.add_argument('--base-url', default=None)
+    score_parser.add_argument('--progress-every', type=int, default=DEFAULT_PROGRESS_EVERY)
+    score_parser.add_argument('--resume', action='store_true')
     score_parser.add_argument(
         '--write-csv-slices',
         action='store_true',

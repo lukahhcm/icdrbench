@@ -356,52 +356,56 @@ Useful overrides:
 
 ## 10. Atomic Evaluation
 
-Atomic evaluation can now run in two modes:
+Atomic evaluation now follows a two-step workflow:
 
-1. score an existing prediction JSONL
-2. call any OpenAI-compatible API directly, including a local `vllm` server
+1. `infer`: call a model API and save raw outputs for all prompt variants
+2. `score`: recompute metrics from saved predictions without rerunning the model
 
-Score existing server outputs:
-
-```bash
-./scripts/eval_atomic_benchmark.sh \
-  --benchmark-path data/benchmark/atomic_ops.jsonl \
-  --predictions-path /path/to/atomic_predictions.jsonl \
-  --output-dir data/eval_runs/atomic_existing
-```
-
-If the prediction file uses non-default field names, override them:
+Run inference for `atomic_ops` only:
 
 ```bash
-./scripts/eval_atomic_benchmark.sh \
-  --benchmark-path data/benchmark/atomic_ops.jsonl \
-  --predictions-path /path/to/atomic_predictions.jsonl \
-  --prediction-status-field status \
-  --prediction-text-field clean_text \
-  --output-dir data/eval_runs/atomic_existing
-```
-
-Run online evaluation against an external API:
-
-```bash
-./scripts/eval_atomic_benchmark.sh \
-  --eval-path data/benchmark_prompts/atomic_ops/eval/atomic_ops.jsonl \
-  --benchmark-path data/benchmark/atomic_ops.jsonl \
+./scripts/infer_benchmark_tracks.sh \
+  --tracks atomic_ops \
+  --eval-root data/benchmark_prompts \
   --model gpt-5.4 \
   --base-url http://123.57.212.178:3333/v1 \
-  --output-dir data/eval_runs/atomic_gpt54
+  --output-root data/inference_runs/gpt54 \
+  --resume
 ```
 
-The scorer writes:
+Then score the saved predictions:
 
-- `predictions.jsonl` in online mode
-- `scored/scored_predictions.jsonl` or `scored_predictions.jsonl`
+```bash
+./scripts/score_benchmark_tracks.sh \
+  --tracks atomic_ops \
+  --benchmark-dir data/benchmark \
+  --predictions-root data/inference_runs/gpt54 \
+  --output-root data/score_runs/gpt54 \
+  --model gpt-5.4
+```
+
+If you already have an existing predictions tree, you can run the scoring step alone. If the prediction file uses non-default field names, override them:
+
+```bash
+./scripts/score_benchmark_tracks.sh \
+  --tracks atomic_ops \
+  --benchmark-dir data/benchmark \
+  --predictions-root /path/to/inference_root \
+  --output-root data/score_runs/atomic_existing \
+  --model gpt-5.4 \
+  --prediction-status-field status \
+  --prediction-text-field clean_text
+```
+
+The scorer now writes compact report files by default:
+
+- `paper_metrics.json`
+- `report.txt`
 - `summary.json`
-- `by_operator.csv`
-- `by_source_domain.csv`
-- `by_reference_status.csv`
+- `instance_metrics.jsonl`
+- `scored_variant_predictions.jsonl`
 
-`summary.json` reports `recipe_success_rate`, `status_accuracy`, `exact_text_match_rate`, `canonical_text_match_rate`, `avg_refinement_gain`, and `order_consistent_success_rate` when applicable.
+For `atomic_ops` and `main`, the paper-facing metrics are `mean_rs`, `rs_at_k`, and `mean_rg`.
 
 ## 11. Local vLLM Serving
 
@@ -415,19 +419,34 @@ To benchmark a local model through the same OpenAI-compatible client path, launc
   --port 8000
 ```
 
-Then point the atomic evaluator at the local server:
+Then run the two-step atomic evaluation against the local server:
 
 ```bash
-./scripts/eval_atomic_benchmark.sh \
-  --eval-path data/benchmark_prompts/atomic_ops/eval/atomic_ops.jsonl \
-  --benchmark-path data/benchmark/atomic_ops.jsonl \
+./scripts/infer_benchmark_tracks.sh \
+  --tracks atomic_ops \
+  --eval-root data/benchmark_prompts \
   --model local-model \
   --base-url http://127.0.0.1:8000/v1 \
   --api-key EMPTY \
-  --output-dir data/eval_runs/atomic_local_model
+  --output-root data/inference_runs/local_model \
+  --resume
+
+./scripts/score_benchmark_tracks.sh \
+  --tracks atomic_ops \
+  --benchmark-dir data/benchmark \
+  --predictions-root data/inference_runs/local_model \
+  --output-root data/score_runs/local_model \
+  --model local-model
 ```
 
 The `vllm` launcher uses `--generation-config vllm` so server-side defaults from a model repo do not silently change benchmark decoding behavior.
+
+If you want one script with a fixed model suite configured at the top, use:
+
+```bash
+./scripts/run_atomic_model_suite.sh infer
+./scripts/run_atomic_model_suite.sh score
+```
 
 ## 12. Evaluate All Tracks
 

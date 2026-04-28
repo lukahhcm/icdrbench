@@ -60,7 +60,9 @@ PROMPT_VARIANT_INDICES="${PROMPT_VARIANT_INDICES:-all}"
 MAX_SAMPLES="${MAX_SAMPLES:-0}"
 TEMPERATURE="${TEMPERATURE:-0.0}"
 MAX_TOKENS="${MAX_TOKENS:-4096}"
+PROGRESS_EVERY="${PROGRESS_EVERY:-20}"
 RESUME_INFER="${RESUME_INFER:-true}"
+RESUME_SCORE="${RESUME_SCORE:-true}"
 
 # Shared gateway settings. Leave empty if you want to set per-model overrides below.
 DEFAULT_BASE_URL="${DEFAULT_BASE_URL:-}"
@@ -115,6 +117,7 @@ run_infer_for_model() {
     --max-samples "$MAX_SAMPLES"
     --temperature "$TEMPERATURE"
     --max-tokens "$MAX_TOKENS"
+    --progress-every "$PROGRESS_EVERY"
   )
   if [[ -n "$base_url" ]]; then
     cmd+=(--base-url "$base_url")
@@ -144,9 +147,13 @@ run_score_for_model() {
     --predictions-root "$INFERENCE_ROOT/$model_slug"
     --output-root "$SCORE_ROOT/$model_slug"
     --model "$model_name"
+    --progress-every "$PROGRESS_EVERY"
   )
   if [[ -n "$base_url" ]]; then
     cmd+=(--base-url "$base_url")
+  fi
+  if [[ "$RESUME_SCORE" == "true" ]]; then
+    cmd+=(--resume)
   fi
 
   echo "[suite] mode=score model=$model_name slug=$model_slug tracks=$TRACKS"
