@@ -21,7 +21,7 @@ Options:
   --benchmark-dir <path>                  Base benchmark-instance directory. Default: data/processed/benchmark_instances
   --output-root <path>                    Prompt-library root. Default: data/processed/prompt_library
   --benchmark-output-root <path>          Final self-contained benchmark root. Default: data/benchmark
-  --prompt-config <path>                  Prompt config YAML. Default: configs/workflow_prompting.yaml
+  --prompt-config <path>                  Prompt config YAML. Default: configs/recipe_prompting.yaml
   --prompt-source <llm|template>          Prompt source. Default: llm
   --variants-per-recipe <int>             Style presets requested per recipe. Default: 11
   --candidates-per-style <int>            Candidate prompts generated per style. Default: 3
@@ -56,7 +56,7 @@ cd "$REPO_ROOT"
 BENCHMARK_DIR="data/processed/benchmark_instances"
 OUTPUT_ROOT="data/processed/prompt_library"
 BENCHMARK_OUTPUT_ROOT="data/benchmark"
-PROMPT_CONFIG="configs/workflow_prompting.yaml"
+PROMPT_CONFIG="configs/recipe_prompting.yaml"
 PROMPT_SOURCE="llm"
 VARIANTS_PER_RECIPE=11
 CANDIDATES_PER_STYLE=3
@@ -280,7 +280,7 @@ run_track() {
 
   echo "[run] track=$track step=generate+judge output_dir=$track_output_dir"
   local generate_cmd=(
-    "$PYTHON_BIN" -m cdrbench.prompting.generate_workflow_prompt_library
+    "$PYTHON_BIN" -m cdrbench.prompting.generate_recipe_prompt_library
     --benchmark-dir "$BENCHMARK_DIR"
     --output-dir "$track_output_dir"
     --prompt-config "$PROMPT_CONFIG"

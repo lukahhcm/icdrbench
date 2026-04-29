@@ -55,7 +55,7 @@ def _first_present(row: dict[str, Any], *keys: str) -> Any:
     return None
 
 
-def _workflow_key(row: dict[str, Any]) -> str:
+def _recipe_key(row: dict[str, Any]) -> str:
     operator_sequence = list(row.get('operator_sequence') or ([row['operator']] if row.get('operator') else []))
     return _stable_id(
         row.get('benchmark_track'),
@@ -70,7 +70,7 @@ def _workflow_key(row: dict[str, Any]) -> str:
 def _sample_prompt_variants(
     candidates: list[dict[str, Any]],
     *,
-    workflow_prompt_key: str,
+    recipe_prompt_key: str,
     instance_id: str,
     sample_count: int,
     sample_seed: int,
@@ -87,7 +87,7 @@ def _sample_prompt_variants(
         key=lambda style_id: _stable_id(
             'prompt-style-sample',
             sample_seed,
-            workflow_prompt_key,
+            recipe_prompt_key,
             instance_id,
             style_id,
         ),
@@ -100,7 +100,7 @@ def _sample_prompt_variants(
             key=lambda candidate: _stable_id(
                 'prompt-candidate-sample',
                 sample_seed,
-                workflow_prompt_key,
+                recipe_prompt_key,
                 instance_id,
                 style_id,
                 candidate.get('candidate_id') or candidate.get('user_requirement') or '',
@@ -127,7 +127,7 @@ def _eval_row(
 ) -> dict[str, Any]:
     prompt_variants = _sample_prompt_variants(
         candidates,
-        workflow_prompt_key=recipe_prompt_key,
+        recipe_prompt_key=recipe_prompt_key,
         instance_id=str(row.get('instance_id') or ''),
         sample_count=prompt_variants_per_sample,
         sample_seed=prompt_sampling_seed,
@@ -210,7 +210,7 @@ def main() -> None:
         insufficient_style_rows = 0
         print(f'start eval track={track} input_rows={total_rows}', flush=True)
         for row_index, row in enumerate(rows, start=1):
-            recipe_prompt_key = _workflow_key(row)
+            recipe_prompt_key = _recipe_key(row)
             candidates = list(library_by_key.get(recipe_prompt_key) or [])
             if not candidates:
                 missing_pool_rows += 1

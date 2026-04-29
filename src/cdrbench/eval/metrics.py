@@ -95,20 +95,3 @@ def compute_recipe_metrics(
         'edit_distance_prediction_to_reference': d_pred,
         'refinement_gain': refinement_gain,
     }
-
-
-def compute_workflow_metrics(
-    *,
-    input_text: Any,
-    reference_status: Any,
-    reference_text: Any,
-    predicted_status: Any,
-    predicted_clean_text: Any,
-) -> dict[str, Any]:
-    return compute_recipe_metrics(
-        input_text=input_text,
-        reference_status=reference_status,
-        reference_text=reference_text,
-        predicted_status=predicted_status,
-        predicted_clean_text=predicted_clean_text,
-    )

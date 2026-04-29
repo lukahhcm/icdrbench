@@ -18,7 +18,7 @@ from cdrbench.llm_utils import build_client, parse_json_response, resolve_api_ke
 
 
 ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_PROMPT_CONFIG = ROOT / 'configs' / 'workflow_prompting.yaml'
+DEFAULT_PROMPT_CONFIG = ROOT / 'configs' / 'recipe_prompting.yaml'
 DEFAULT_PROGRESS_EVERY = 20
 LOCAL_HOSTS = {'127.0.0.1', '0.0.0.0', '::1', 'localhost'}
 

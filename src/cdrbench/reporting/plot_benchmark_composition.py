@@ -129,14 +129,14 @@ def main() -> None:
     args = parser.parse_args()
 
     benchmark_dir = (ROOT / args.benchmark_dir).resolve()
-    workflow_library_dir = (ROOT / args.recipe_library_dir).resolve()
+    recipe_library_dir = (ROOT / args.recipe_library_dir).resolve()
     output_dir = (ROOT / args.output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    summary_path = workflow_library_dir / "recipe_library_summary.csv"
+    summary_path = recipe_library_dir / "recipe_library_summary.csv"
     if not summary_path.exists():
-        summary_path = workflow_library_dir / "workflow_library_summary.csv"
-    workflow_summary = _load_csv_frame(summary_path)
+        summary_path = recipe_library_dir / "workflow_library_summary.csv"
+    recipe_summary = _load_csv_frame(summary_path)
     main_df = _load_jsonl_frame(_track_jsonl_path(benchmark_dir, "main"))
     order_df = _load_jsonl_frame(_track_jsonl_path(benchmark_dir, "order_sensitivity"))
     atomic_df = _load_jsonl_frame(_track_jsonl_path(benchmark_dir, "atomic_ops"))
@@ -144,7 +144,7 @@ def main() -> None:
     order_summary = _load_csv_frame(_track_csv_path(benchmark_dir, "order_sensitivity", "order_sensitivity_summary.csv"))
     atomic_summary = _load_csv_frame(_track_csv_path(benchmark_dir, "atomic_ops", "atomic_ops_summary.csv"))
 
-    workflow_domains = _value_counts(workflow_summary, "domain")
+    recipe_domains = _value_counts(recipe_summary, "domain")
     main_domains = _value_counts(main_df, "domain")
     main_type_column = _preferred_column(main_df, "recipe_type", "workflow_type") or "recipe_type"
     summary_type_label = "recipe_type"
@@ -170,7 +170,7 @@ def main() -> None:
     fig, axes = plt.subplots(2, 4, figsize=(20, 10), constrained_layout=True)
     fig.suptitle("CDR-Bench Composition Overview", fontsize=18, fontweight="bold")
 
-    _draw_donut(axes[0, 0], workflow_domains, "Recipe Library Domains", palette)
+    _draw_donut(axes[0, 0], recipe_domains, "Recipe Library Domains", palette)
     _draw_donut(axes[0, 1], main_domains, "Main Track by Domain", palette)
     _draw_donut(axes[0, 2], main_types, "Main Track by Recipe Type", palette)
     _draw_donut(axes[0, 3], main_status, "Main Variant Status", status_palette)
@@ -186,7 +186,7 @@ def main() -> None:
     plt.close(fig)
 
     summary_payload = {
-        "recipe_library_domains": _counts_to_records(workflow_domains, "domain"),
+        "recipe_library_domains": _counts_to_records(recipe_domains, "domain"),
         "main_domains": _counts_to_records(main_domains, "domain"),
         "main_recipe_types": _counts_to_records(main_types, summary_type_label),
         "main_variant_status": _counts_to_records(main_status, "status"),
@@ -200,7 +200,7 @@ def main() -> None:
         encoding="utf-8",
     )
 
-    pd.DataFrame(_counts_to_records(workflow_domains, "domain")).to_csv(output_dir / "recipe_library_domains.csv", index=False)
+    pd.DataFrame(_counts_to_records(recipe_domains, "domain")).to_csv(output_dir / "recipe_library_domains.csv", index=False)
     pd.DataFrame(_counts_to_records(main_domains, "domain")).to_csv(output_dir / "main_domains.csv", index=False)
     pd.DataFrame(_counts_to_records(main_types, summary_type_label)).to_csv(output_dir / "main_recipe_types.csv", index=False)
     pd.DataFrame(_counts_to_records(main_status, "status")).to_csv(output_dir / "main_variant_status.csv", index=False)

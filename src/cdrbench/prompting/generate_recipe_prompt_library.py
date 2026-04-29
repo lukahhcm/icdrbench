@@ -94,8 +94,8 @@ STYLE_PRESETS = [
         'guidance': 'Write it like a processing requirement or policy note, but still from a user-facing perspective rather than code.',
     },
     {
-        'style_id': 'workflow_narrative',
-        'label': 'Workflow Narrative',
+        'style_id': 'recipe_narrative',
+        'label': 'Recipe Narrative',
         'definition': 'A scenario-style request that first explains the messy data situation and then asks for the needed processing.',
         'template': 'I have {data_situation}. Please {requirement}.',
         'example': 'I have raw crawl pages with markup, navigation links, and messy whitespace. Please turn them into clean readable text and keep only pages whose alphanumeric content makes up at least 60% of the final text.',
@@ -112,10 +112,10 @@ STYLE_PRESETS = [
     {
         'style_id': 'negative_constraint_driven',
         'label': 'Negative-Constraint Driven',
-        'definition': 'A request centered on what must not remain in the output, useful for cleaning and filtering workflows.',
+        'definition': 'A request centered on what must not remain in the output, useful for cleaning and filtering recipes.',
         'template': 'When processing this text, make sure the final result does not contain {noise_list}; also {requirement}.',
         'example': 'When processing this report, make sure the final result contains no disclaimers, table residue, or lines longer than 180 characters. After that, judge whether it is suitable for retrieval.',
-        'guidance': 'Emphasize unwanted content that should be absent from the final output, while preserving the actual workflow order.',
+        'guidance': 'Emphasize unwanted content that should be absent from the final output, while preserving the actual recipe order.',
     },
     {
         'style_id': 'conversational_cooperative',
@@ -131,17 +131,17 @@ GENERATION_SYSTEM_PROMPT = """You are an expert at understanding data processing
 
 You will be given:
 1. The benchmark track and domain.
-2. The internal workflow sequence and filter parameters.
+2. The internal recipe sequence and filter parameters.
 3. Source code and documentation snippets for the operators.
 4. A list of requested style slots.
 
 Your task:
 - Generate exactly one candidate user requirement body for every requested style slot.
-- The result for every slot must be FUNCTIONALLY EQUIVALENT to the workflow.
+- The result for every slot must be FUNCTIONALLY EQUIVALENT to the recipe.
 - Pretend the user has never seen the code.
 - Never mention operator names, parameter names, class names, file names, YAML, Python, or implementation details.
-- Preserve the exact workflow order and all essential filter semantics.
-- If a workflow contains any filter/keep-drop step, you MUST express every active threshold naturally and explicitly in the user requirement.
+- Preserve the exact recipe order and all essential filter semantics.
+- If a recipe contains any filter/keep-drop step, you MUST express every active threshold naturally and explicitly in the user requirement.
 - Express thresholds as user-style constraints such as "at least 100 characters", "no more than 200 characters per line", "below 15%", or "at least 50 words".
 - Do NOT use parameter names such as min_len, max_len, min_ratio, max_ratio, min_num, max_num, or internal statistic names.
 - Make the prompts stylistically diverse and realistic across different users.
@@ -173,17 +173,17 @@ Return JSON only, with this exact schema:
 JUDGE_SYSTEM_PROMPT = """You are a strict benchmark prompt judge.
 
 You will be given:
-- The internal workflow definition and filter parameters.
+- The internal recipe definition and filter parameters.
 - The operator code/doc evidence.
 - One candidate user-facing prompt.
 
-Judge whether the prompt is faithful to what the workflow actually does.
+Judge whether the prompt is faithful to what the recipe actually does.
 
 Mandatory keep conditions:
 1. Functional equivalence: the prompt requests the same transformation and filtering behavior.
-2. Order correctness: the requested order matches the internal workflow order.
+2. Order correctness: the requested order matches the internal recipe order.
 3. No code leakage: the prompt does not mention operator names, parameter names, YAML, Python, hidden code, or implementation internals.
-4. Threshold grounding: if the workflow has filter parameters, all active numeric thresholds must appear as natural user-facing constraints, not vague words like "long enough" or "too repetitive".
+4. Threshold grounding: if the recipe has filter parameters, all active numeric thresholds must appear as natural user-facing constraints, not vague words like "long enough" or "too repetitive".
 5. Wrapper compatibility: the user requirement can be safely combined with a fixed benchmark wrapper that separately supplies raw input text and the JSON output contract.
 
 Also score:
@@ -287,7 +287,7 @@ def _chat_completion_with_retries(
     user_prompt: str,
     temperature: float,
     request_kind: str,
-    workflow_key: str,
+    recipe_key: str,
     candidate_id: str | None = None,
 ) -> str:
     last_error: Exception | None = None
@@ -303,7 +303,7 @@ def _chat_completion_with_retries(
         except Exception as exc:
             last_error = exc
             retryable = _is_retryable_llm_error(exc)
-            target = f'workflow={workflow_key}'
+            target = f'recipe={recipe_key}'
             if candidate_id:
                 target += f' candidate={candidate_id}'
             if not retryable or attempt > REQUEST_MAX_RETRIES:
@@ -320,7 +320,7 @@ def _chat_completion_with_retries(
             )
             time.sleep(sleep_seconds)
     raise TransientLLMError(
-        f'{request_kind} request failed unexpectedly for workflow={workflow_key}: {last_error}'
+        f'{request_kind} request failed unexpectedly for recipe={recipe_key}: {last_error}'
     ) from last_error
 
 
@@ -382,7 +382,7 @@ def _load_text(path: Path | None) -> str:
     return path.read_text(encoding='utf-8')
 
 
-def _workflow_key(row: dict[str, Any]) -> str:
+def _recipe_key(row: dict[str, Any]) -> str:
     operator_sequence = list(row.get('operator_sequence') or ([row['operator']] if row.get('operator') else []))
     return _stable_id(
         row.get('benchmark_track'),
@@ -410,7 +410,7 @@ def _group_rows(rows: list[dict[str, Any]], skipped_ops: set[str]) -> tuple[dict
         if _should_skip_row(row, skipped_ops):
             skipped += 1
             continue
-        key = _workflow_key(row)
+        key = _recipe_key(row)
         grouped.setdefault(key, []).append(row)
     return grouped, skipped
 
@@ -442,11 +442,11 @@ def _format_style_request(style_request: dict[str, Any]) -> str:
     )
 
 
-def _workflow_bundle(
-    workflow_key: str,
+def _recipe_bundle(
+    recipe_key: str,
     rows: list[dict[str, Any]],
     prompt_cfg: dict[str, Any],
-    variants_per_workflow: int,
+    variants_per_recipe: int,
     candidates_per_style: int,
 ) -> dict[str, Any]:
     row = rows[0]
@@ -455,7 +455,7 @@ def _workflow_bundle(
     source_domain_set = sorted(
         {
             str(source_domain)
-            for source_domain in (workflow_row.get('source_domain') for workflow_row in rows)
+            for source_domain in (recipe_row.get('source_domain') for recipe_row in rows)
             if source_domain
         }
     )
@@ -480,7 +480,7 @@ def _workflow_bundle(
             }
         )
     return {
-        'recipe_prompt_key': workflow_key,
+        'recipe_prompt_key': recipe_key,
         'benchmark_track': row.get('benchmark_track'),
         'domain': row.get('domain'),
         'recipe_type': _first_present(row, 'recipe_type', 'workflow_type'),
@@ -490,7 +490,7 @@ def _workflow_bundle(
         'threshold_meta': row.get('threshold_meta') or {},
         'num_instances': len(rows),
         'source_domain_set': source_domain_set,
-        'style_requests': _style_requests(variants_per_workflow, candidates_per_style),
+        'style_requests': _style_requests(variants_per_recipe, candidates_per_style),
         'operators': operators,
     }
 
@@ -523,7 +523,7 @@ def _generation_user_prompt(bundle: dict[str, Any]) -> str:
         f"Filter params by name: {json.dumps(bundle['filter_params_by_name'], ensure_ascii=False, sort_keys=True)}\n"
         f"Threshold meta: {json.dumps(bundle['threshold_meta'], ensure_ascii=False, sort_keys=True)}\n\n"
         "Generate exactly one candidate user requirement body for every requested style slot below.\n"
-        "Use the style definition, template, and example only as guidance; do not copy the example literally unless the workflow matches it.\n\n"
+        "Use the style definition, template, and example only as guidance; do not copy the example literally unless the recipe matches it.\n\n"
         f"{chr(10).join(style_lines)}\n\n"
         "Important: act as if the user has never seen code. Do not mention operator names, parameter names, class names, YAML, file paths, JSON schema, or implementation-specific terms.\n"
         "Return only the user requirement body for each candidate. The final benchmark prompt wrapper and output format will be added by code.\n\n"
@@ -572,7 +572,7 @@ def _judge_user_prompt(entry: dict[str, Any], candidate: dict[str, Any], *, clie
             user_prompt=user_prompt,
             temperature=temperature,
             request_kind='judge',
-            workflow_key=str(entry.get('recipe_prompt_key') or ''),
+            recipe_key=str(entry.get('recipe_prompt_key') or ''),
             candidate_id=str(candidate.get('candidate_id') or ''),
         )
         last_content = content
@@ -669,7 +669,7 @@ def _call_llm_for_candidates(
             user_prompt=_generation_user_prompt(bundle),
             temperature=temperature,
             request_kind='generation',
-            workflow_key=str(bundle.get('recipe_prompt_key') or ''),
+            recipe_key=str(bundle.get('recipe_prompt_key') or ''),
         )
         last_content = content
         try:
@@ -887,7 +887,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description='Generate and judge recipe-level CDR-Bench prompt libraries.')
     parser.add_argument('--benchmark-dir', default='data/processed/benchmark_instances')
     parser.add_argument('--output-dir', default='data/processed/prompt_library')
-    parser.add_argument('--prompt-config', default='configs/workflow_prompting.yaml')
+    parser.add_argument('--prompt-config', default='configs/recipe_prompting.yaml')
     parser.add_argument('--tracks', nargs='*', default=list(TRACK_FILES), choices=sorted(TRACK_FILES))
     parser.add_argument('--prompt-source', choices=['llm', 'template'], default='llm')
     parser.add_argument('--model', default=None, help='OpenAI-compatible generation model. Defaults to OPENAI_MODEL / LLM_MODEL env.')
@@ -898,7 +898,7 @@ def main() -> None:
     parser.add_argument('--judge-api-key', default=None, help='Judge API key. Defaults to --api-key or OPENAI_API_KEY / DASHSCOPE_API_KEY env.')
     parser.add_argument('--temperature', type=float, default=0.8)
     parser.add_argument('--judge-temperature', type=float, default=0.0)
-    parser.add_argument('--variants-per-recipe', '--variants-per-workflow', dest='variants_per_workflow', type=int, default=11, help='How many style presets to request per recipe.')
+    parser.add_argument('--variants-per-recipe', '--variants-per-workflow', dest='variants_per_recipe', type=int, default=11, help='How many style presets to request per recipe.')
     parser.add_argument('--candidates-per-style', type=int, default=3, help='How many prompt candidates to generate for each requested style.')
     parser.add_argument('--min-average-score', type=float, default=3.5)
     parser.add_argument(
@@ -956,18 +956,18 @@ def main() -> None:
         track_generated_count = 0
         track_accepted_count = 0
         accepted_recipe_count = 0
-        total_workflows = len(grouped)
+        total_recipes = len(grouped)
         print(
-            f"start track={track} input_rows={len(rows)} recipes={total_workflows} skipped_rows={skipped_count}",
+            f"start track={track} input_rows={len(rows)} recipes={total_recipes} skipped_rows={skipped_count}",
             flush=True,
         )
 
-        for workflow_index, (workflow_key, workflow_rows) in enumerate(grouped.items(), start=1):
-            bundle = _workflow_bundle(
-                workflow_key,
-                workflow_rows,
+        for recipe_index, (recipe_key, recipe_rows) in enumerate(grouped.items(), start=1):
+            bundle = _recipe_bundle(
+                recipe_key,
+                recipe_rows,
                 prompt_cfg,
-                args.variants_per_workflow,
+                args.variants_per_recipe,
                 args.candidates_per_style,
             )
             cache_key = _cache_key(
@@ -1005,7 +1005,7 @@ def main() -> None:
                     )
                     cache_row = {
                         'cache_key': cache_key,
-                        'recipe_prompt_key': workflow_key,
+                        'recipe_prompt_key': recipe_key,
                         'library_entry': library_entry,
                     }
                     _append_jsonl(cache_path, cache_row)
@@ -1013,7 +1013,7 @@ def main() -> None:
                     source = args.prompt_source
                 except Exception as exc:
                     print(
-                        f"recipe failed; continuing track={track} recipe={workflow_key} error={exc}",
+                        f"recipe failed; continuing track={track} recipe={recipe_key} error={exc}",
                         flush=True,
                     )
                     library_entry = _failed_library_entry(
@@ -1036,10 +1036,10 @@ def main() -> None:
             if int(library_entry.get('accepted_candidate_count', 0) or 0) > 0:
                 accepted_recipe_count += 1
             print(
-                f"progress track={track} recipe={workflow_index}/{total_workflows} "
+                f"progress track={track} recipe={recipe_index}/{total_recipes} "
                 f"source={source} accepted={library_entry.get('accepted_candidate_count', 0)} "
                 f"accepted_styles={library_entry.get('accepted_style_count', 0)} "
-                f"key={workflow_key}",
+                f"key={recipe_key}",
                 flush=True,
             )
 
@@ -1050,7 +1050,7 @@ def main() -> None:
                 'skipped_rows': skipped_count,
                 'recipe_count': len(grouped),
                 'accepted_recipe_count': accepted_recipe_count,
-                'variants_per_recipe': args.variants_per_workflow,
+                'variants_per_recipe': args.variants_per_recipe,
                 'candidates_per_style': args.candidates_per_style,
                 'generated_candidate_count': track_generated_count,
                 'accepted_candidate_count': track_accepted_count,

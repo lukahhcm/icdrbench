@@ -315,13 +315,13 @@ def _labeling_meta(record: dict[str, Any]) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _workflow_rows_for_domain(domain_dir: Path) -> list[dict[str, Any]]:
-    workflow_csv = domain_dir / 'selected_recipes.csv'
-    if not workflow_csv.exists():
-        workflow_csv = domain_dir / 'selected_workflows.csv'
-    if not workflow_csv.exists():
+def _recipe_rows_for_domain(domain_dir: Path) -> list[dict[str, Any]]:
+    recipe_csv = domain_dir / 'selected_recipes.csv'
+    if not recipe_csv.exists():
+        recipe_csv = domain_dir / 'selected_workflows.csv'
+    if not recipe_csv.exists():
         return []
-    df = pd.read_csv(workflow_csv)
+    df = pd.read_csv(recipe_csv)
     if 'selection_source' in df.columns:
         df = df[df['selection_source'] != 'coverage_fallback_unassigned_signature']
     elif 'selection_reason' in df.columns:
@@ -336,8 +336,8 @@ def _domain_outputs_complete(domain_out_dir: Path) -> bool:
 def _load_domain_yaml(domain_out_dir: Path) -> dict[str, Any] | None:
     try:
         recipe_yaml = domain_out_dir / 'recipe_library.yaml'
-        workflow_yaml = domain_out_dir / 'workflow_library.yaml'
-        target_yaml = recipe_yaml if recipe_yaml.exists() else workflow_yaml
+        legacy_workflow_yaml = domain_out_dir / 'workflow_library.yaml'
+        target_yaml = recipe_yaml if recipe_yaml.exists() else legacy_workflow_yaml
         with target_yaml.open('r', encoding='utf-8') as f:
             payload = yaml.safe_load(f)
     except Exception:
@@ -345,8 +345,8 @@ def _load_domain_yaml(domain_out_dir: Path) -> dict[str, Any] | None:
     if not isinstance(payload, dict):
         return None
     recipes = payload.get('recipes')
-    workflows = payload.get('workflows')
-    if isinstance(recipes, list) or isinstance(workflows, list):
+    legacy_workflows = payload.get('workflows')
+    if isinstance(recipes, list) or isinstance(legacy_workflows, list):
         return payload
     return None
 
@@ -558,7 +558,7 @@ def _select_stage_attachments(
     stage: str,
     final_step_index: int,
     min_filter_support: int,
-    max_filters_per_workflow: int,
+    max_filters_per_recipe: int,
 ) -> list[dict[str, Any]]:
     if stage == 'raw':
         candidates = [row for row in attachment_candidates if row['step_index'] == 0]
@@ -585,18 +585,18 @@ def _select_stage_attachments(
             continue
         seen_filters.add(row['filter_name'])
         selected.append({k: v for k, v in row.items() if k != 'selection_score'})
-        if len(selected) >= max_filters_per_workflow:
+        if len(selected) >= max_filters_per_recipe:
             break
     return selected
 
 
 def _select_order_sensitivity_families(
-    workflow_id: str,
+    recipe_id: str,
     attachment_candidates: list[dict[str, Any]],
     *,
     final_step_index: int,
     min_filter_support: int,
-    max_families_per_workflow: int,
+    max_families_per_recipe: int,
 ) -> list[dict[str, Any]]:
     eligible = [row for row in attachment_candidates if row['support_records'] >= min_filter_support]
     by_filter: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
@@ -628,7 +628,7 @@ def _select_order_sensitivity_families(
             abs(end.get('delta_from_prev_mean') or 0.0),
         )
         family = {
-            'order_family_id': f'{workflow_id}__order_family__{filter_name}',
+            'order_family_id': f'{recipe_id}__order_family__{filter_name}',
             'filter_name': filter_name,
             'front': {k: v for k, v in front.items() if k != 'selection_score'},
             'middle': {k: v for k, v in middle.items() if k != 'selection_score'},
@@ -639,7 +639,7 @@ def _select_order_sensitivity_families(
         families.append(family)
 
     families.sort(key=lambda row: (-row['selection_score'][0], -row['selection_score'][1], row['filter_name']))
-    return [{k: v for k, v in row.items() if k != 'selection_score'} for row in families[:max_families_per_workflow]]
+    return [{k: v for k, v in row.items() if k != 'selection_score'} for row in families[:max_families_per_recipe]]
 
 
 def _best_attachment(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -656,20 +656,20 @@ def _best_attachment(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _order_variant(
-    workflow_id: str,
+    recipe_id: str,
     order_family_id: str,
     mapper_names: list[str],
     slot: str,
     attachment: dict[str, Any],
 ) -> dict[str, Any]:
     if slot == 'front':
-        workflow_type = 'filter-then-clean'
+        recipe_type = 'filter-then-clean'
         operator_sequence = [attachment['filter_name'], *mapper_names]
     elif slot == 'end':
-        workflow_type = 'clean-then-filter'
+        recipe_type = 'clean-then-filter'
         operator_sequence = [*mapper_names, attachment['filter_name']]
     elif slot == 'middle':
-        workflow_type = 'clean-filter-clean'
+        recipe_type = 'clean-filter-clean'
         split_at = int(attachment['step_index'])
         operator_sequence = [*mapper_names[:split_at], attachment['filter_name'], *mapper_names[split_at:]]
     else:
@@ -679,7 +679,7 @@ def _order_variant(
         'recipe_variant_id': f'{order_family_id}__{slot}',
         'order_family_id': order_family_id,
         'order_slot': slot,
-        'recipe_type': workflow_type,
+        'recipe_type': recipe_type,
         'benchmark_track': 'order_sensitivity',
         'operator_sequence': operator_sequence,
         'filter_name': attachment['filter_name'],
@@ -691,7 +691,7 @@ def _order_variant(
 
 
 def _materialize_variants(
-    workflow_id: str,
+    recipe_id: str,
     ordered_mappers: list[dict[str, Any]],
     *,
     raw_attachments: list[dict[str, Any]],
@@ -701,7 +701,7 @@ def _materialize_variants(
     mapper_names = [variant['name'] for variant in ordered_mappers]
     main_variants = [
         {
-            'recipe_variant_id': f'{workflow_id}__clean_only',
+            'recipe_variant_id': f'{recipe_id}__clean_only',
             'recipe_type': 'clean-only',
             'benchmark_track': 'main',
             'operator_sequence': mapper_names,
@@ -715,7 +715,7 @@ def _materialize_variants(
     for idx, attachment in enumerate(raw_attachments, start=1):
         main_variants.append(
             {
-                'recipe_variant_id': f'{workflow_id}__filter_then_clean_{idx:02d}',
+                'recipe_variant_id': f'{recipe_id}__filter_then_clean_{idx:02d}',
                 'recipe_type': 'filter-then-clean',
                 'benchmark_track': 'main',
                 'operator_sequence': [attachment['filter_name'], *mapper_names],
@@ -730,7 +730,7 @@ def _materialize_variants(
     for idx, attachment in enumerate(final_attachments, start=1):
         main_variants.append(
             {
-                'recipe_variant_id': f'{workflow_id}__clean_then_filter_{idx:02d}',
+                'recipe_variant_id': f'{recipe_id}__clean_then_filter_{idx:02d}',
                 'recipe_type': 'clean-then-filter',
                 'benchmark_track': 'main',
                 'operator_sequence': [*mapper_names, attachment['filter_name']],
@@ -746,9 +746,9 @@ def _materialize_variants(
     materialized_order_families: list[dict[str, Any]] = []
     for family in order_families:
         family_variants = [
-            _order_variant(workflow_id, family['order_family_id'], mapper_names, 'front', family['front']),
-            _order_variant(workflow_id, family['order_family_id'], mapper_names, 'middle', family['middle']),
-            _order_variant(workflow_id, family['order_family_id'], mapper_names, 'end', family['end']),
+            _order_variant(recipe_id, family['order_family_id'], mapper_names, 'front', family['front']),
+            _order_variant(recipe_id, family['order_family_id'], mapper_names, 'middle', family['middle']),
+            _order_variant(recipe_id, family['order_family_id'], mapper_names, 'end', family['end']),
         ]
         order_variants.extend(family_variants)
         materialized_order_families.append(
@@ -766,30 +766,30 @@ def _materialize_variants(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description='Materialize main and order-sensitivity workflow drafts from mined clean workflows.'
+        description='Materialize main and order-sensitivity recipe drafts from mined clean recipes.'
     )
     parser.add_argument('--domains-config', default='configs/domains.yaml')
-    parser.add_argument('--workflow-mining-dir', default='data/processed/recipe_mining')
+    parser.add_argument('--recipe-mining-dir', '--workflow-mining-dir', dest='recipe_mining_dir', default='data/processed/recipe_mining')
     parser.add_argument('--filtered-path', default='data/processed/domain_filtered/all.jsonl')
     parser.add_argument('--output-dir', default='data/processed/recipe_library')
     parser.add_argument('--max-support-records', type=int, default=128)
     parser.add_argument('--min-filter-support', type=int, default=5)
-    parser.add_argument('--max-filters-per-workflow', type=int, default=3)
-    parser.add_argument('--resume', action='store_true', help='Skip domains whose workflow-library outputs already exist.')
+    parser.add_argument('--max-filters-per-recipe', '--max-filters-per-workflow', dest='max_filters_per_recipe', type=int, default=3)
+    parser.add_argument('--resume', action='store_true', help='Skip domains whose recipe-library outputs already exist.')
     args = parser.parse_args()
 
     root = ROOT
     domains_cfg = load_domains_config(root / args.domains_config)
     plan = build_domain_execution_plan(domains_cfg)
-    workflow_mining_dir = (root / args.workflow_mining_dir).resolve()
+    recipe_mining_dir = (root / args.recipe_mining_dir).resolve()
     filtered_path = (root / args.filtered_path).resolve()
     output_dir = (root / args.output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if not filtered_path.exists():
         raise SystemExit(f'filtered corpus not found: {filtered_path}')
-    if not workflow_mining_dir.exists():
-        raise SystemExit(f'workflow mining dir not found: {workflow_mining_dir}')
+    if not recipe_mining_dir.exists():
+        raise SystemExit(f'recipe mining dir not found: {recipe_mining_dir}')
 
     _log(f'loading filtered corpus -> {filtered_path}')
     records_by_domain: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -804,8 +804,8 @@ def main() -> None:
 
     summary_rows: list[dict[str, Any]] = []
     global_yaml = {'domains': {}}
-    domain_dirs = sorted(path for path in workflow_mining_dir.iterdir() if path.is_dir())
-    _log(f'found {len(domain_dirs)} workflow-mining domain dirs -> {workflow_mining_dir}')
+    domain_dirs = sorted(path for path in recipe_mining_dir.iterdir() if path.is_dir())
+    _log(f'found {len(domain_dirs)} recipe-mining domain dirs -> {recipe_mining_dir}')
 
     for domain_index, domain_dir in enumerate(domain_dirs, start=1):
         domain = domain_dir.name
@@ -819,7 +819,7 @@ def main() -> None:
                 continue
             _log(f'[{domain_index}/{len(domain_dirs)}] {domain}: resume found outputs but yaml is unreadable; recomputing')
 
-        recipe_rows = _workflow_rows_for_domain(domain_dir)
+        recipe_rows = _recipe_rows_for_domain(domain_dir)
         if not recipe_rows:
             _log(f'[{domain_index}/{len(domain_dirs)}] {domain}: no selected_recipes.csv rows; skip')
             continue
@@ -837,8 +837,8 @@ def main() -> None:
         order_family_rows: list[dict[str, Any]] = []
         variant_rows: list[dict[str, Any]] = []
 
-        for workflow_index, row in enumerate(recipe_rows, start=1):
-            recipe_id = _clean_optional_id(_first_present(row, 'recipe_id', 'workflow_id')) or f'{domain}_recipe_auto_{workflow_index:03d}'
+        for recipe_index, row in enumerate(recipe_rows, start=1):
+            recipe_id = _clean_optional_id(_first_present(row, 'recipe_id', 'workflow_id')) or f'{domain}_recipe_auto_{recipe_index:03d}'
             operator_set = _parse_operator_set(str(row['operators']))
             ordered_mappers = _ordered_mapper_sequence(domain, operator_set, plan)
             support_records = _supporting_records(
@@ -847,7 +847,7 @@ def main() -> None:
                 max_records=args.max_support_records,
             )
             _log(
-                f'  [{workflow_index}/{len(recipe_rows)}] {domain}/{recipe_id}: '
+                f'  [{recipe_index}/{len(recipe_rows)}] {domain}/{recipe_id}: '
                 f'{len(ordered_mappers)} clean ops, {len(support_records)} support records'
             )
             filter_checkpoint_rows, attachment_candidates = _collect_checkpoint_filter_stats(
@@ -861,21 +861,21 @@ def main() -> None:
                 stage='raw',
                 final_step_index=final_step_index,
                 min_filter_support=args.min_filter_support,
-                max_filters_per_workflow=args.max_filters_per_workflow,
+                max_filters_per_recipe=args.max_filters_per_recipe,
             )
             final_attachments = _select_stage_attachments(
                 attachment_candidates,
                 stage='final',
                 final_step_index=final_step_index,
                 min_filter_support=args.min_filter_support,
-                max_filters_per_workflow=args.max_filters_per_workflow,
+                max_filters_per_recipe=args.max_filters_per_recipe,
             )
             order_families = _select_order_sensitivity_families(
                 recipe_id,
                 attachment_candidates,
                 final_step_index=final_step_index,
                 min_filter_support=args.min_filter_support,
-                max_families_per_workflow=args.max_filters_per_workflow,
+                max_families_per_recipe=args.max_filters_per_recipe,
             )
             main_variants, order_variants, materialized_order_families = _materialize_variants(
                 recipe_id,

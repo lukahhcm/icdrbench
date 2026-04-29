@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[3]
 
 from cdrbench.config import load_domains_config
 from cdrbench.domain_assignment import build_domain_execution_plan
-from cdrbench.prepare_data.materialize_domain_workflows import (
+from cdrbench.prepare_data.materialize_domain_recipes import (
     FILTER_CALIBRATION_RULES,
     FILTER_STATUS_RULES,
     RATIO_THRESHOLD_KEYS,
@@ -305,7 +305,7 @@ def _calibrate_filter_params_for_target(
     }
 
 
-def _execute_workflow(
+def _execute_recipe(
     record: dict[str, Any],
     sequence: list[str],
     operators_by_name: dict[str, dict[str, Any]],
@@ -424,17 +424,17 @@ def _mark_source_usage(rows: Iterable[dict[str, Any]], source_usage_counts: dict
             source_usage_counts[str(source_id)] += 1
 
 
-def _load_domain_workflows(workflow_library_dir: Path) -> dict[str, dict[str, Any]]:
-    workflows = {}
-    paths = sorted(workflow_library_dir.glob('*/recipe_library.yaml'))
+def _load_domain_recipes(recipe_library_dir: Path) -> dict[str, dict[str, Any]]:
+    recipes_by_domain = {}
+    paths = sorted(recipe_library_dir.glob('*/recipe_library.yaml'))
     if not paths:
-        paths = sorted(workflow_library_dir.glob('*/workflow_library.yaml'))
+        paths = sorted(recipe_library_dir.glob('*/workflow_library.yaml'))
     for path in paths:
         with path.open('r', encoding='utf-8') as f:
             payload = yaml.safe_load(f)
         if isinstance(payload, dict) and payload.get('domain'):
-            workflows[str(payload['domain'])] = payload
-    return workflows
+            recipes_by_domain[str(payload['domain'])] = payload
+    return recipes_by_domain
 
 
 def _active_records_for_mapper(
@@ -507,7 +507,7 @@ def _materialize_atomic_mapper(
     rows = []
     for record in candidates:
         try:
-            execution = _execute_workflow(record, [op_name], operators_by_name)
+            execution = _execute_recipe(record, [op_name], operators_by_name)
         except Exception:
             continue
         if execution['reference_status'] == 'KEEP' and execution['reference_text'] != str(record.get('text', '')):
@@ -601,7 +601,7 @@ def _materialize_atomic_filter(
     drop_rows = []
     for record in value_records:
         try:
-            execution = _execute_workflow(record, [op_name], operators_by_name, params_by_name)
+            execution = _execute_recipe(record, [op_name], operators_by_name, params_by_name)
         except Exception:
             continue
         row = _atomic_record(
@@ -690,7 +690,7 @@ def _materialize_atomic_ops(
 
 def _materialize_main_variant(
     domain: str,
-    workflow: dict[str, Any],
+    recipe: dict[str, Any],
     variant: dict[str, Any],
     records: list[dict[str, Any]],
     operators_by_name: dict[str, dict[str, Any]],
@@ -710,7 +710,7 @@ def _materialize_main_variant(
     base = {
         'benchmark_track': 'main',
         'domain': domain,
-        'recipe_id': _first_present(workflow, 'recipe_id', 'workflow_id'),
+        'recipe_id': _first_present(recipe, 'recipe_id', 'workflow_id'),
         'recipe_variant_id': _first_present(variant, 'recipe_variant_id', 'workflow_variant_id'),
         'recipe_type': _first_present(variant, 'recipe_type', 'workflow_type'),
         'order_family_id': None,
@@ -721,7 +721,7 @@ def _materialize_main_variant(
     if filter_index is None:
         rows = []
         for record in candidates:
-            execution = _execute_workflow(record, sequence, operators_by_name)
+            execution = _execute_recipe(record, sequence, operators_by_name)
             if execution['reference_status'] == 'KEEP' and execution['reference_text'] != str(record.get('text', '')):
                 rows.append(_variant_record(base, record, sequence, {}, execution, None))
             if len(rows) >= args.max_instances_per_variant:
@@ -788,7 +788,7 @@ def _materialize_main_variant(
     drop_rows = []
     for record in value_records:
         try:
-            execution = _execute_workflow(record, sequence, operators_by_name, filter_params_by_name)
+            execution = _execute_recipe(record, sequence, operators_by_name, filter_params_by_name)
         except Exception:
             continue
         row = _variant_record(base, record, sequence, filter_params_by_name, execution, threshold_meta)
@@ -825,7 +825,7 @@ def _materialize_main_variant(
 
 def _materialize_order_family(
     domain: str,
-    workflow: dict[str, Any],
+    recipe: dict[str, Any],
     family: dict[str, Any],
     records: list[dict[str, Any]],
     operators_by_name: dict[str, dict[str, Any]],
@@ -837,7 +837,7 @@ def _materialize_order_family(
     if set(variants_by_slot) != {'front', 'middle', 'end'}:
         return [], {
             'domain': domain,
-            'recipe_id': _first_present(workflow, 'recipe_id', 'workflow_id'),
+            'recipe_id': _first_present(recipe, 'recipe_id', 'workflow_id'),
             'order_family_id': family.get('order_family_id'),
             'status': 'skipped_missing_slots',
             'selected_group_count': 0,
@@ -894,7 +894,7 @@ def _materialize_order_family(
     if threshold_meta.get('zero_ratio_threshold') and args.zero_ratio_threshold_policy == 'skip':
         return [], {
             'domain': domain,
-            'recipe_id': _first_present(workflow, 'recipe_id', 'workflow_id'),
+            'recipe_id': _first_present(recipe, 'recipe_id', 'workflow_id'),
             'order_family_id': family.get('order_family_id'),
             'filter_name': filter_name,
             'status': 'skipped_zero_ratio_threshold',
@@ -918,13 +918,13 @@ def _materialize_order_family(
             for slot in ('front', 'middle', 'end'):
                 variant = variants_by_slot[slot]
                 sequence = list(variant['operator_sequence'])
-                execution = _execute_workflow(record, sequence, operators_by_name, filter_params_by_name)
+                execution = _execute_recipe(record, sequence, operators_by_name, filter_params_by_name)
                 signature = (execution['reference_status'], execution['reference_text'])
                 signatures.add(signature)
                 base = {
                     'benchmark_track': 'order_sensitivity',
                     'domain': domain,
-                    'recipe_id': _first_present(workflow, 'recipe_id', 'workflow_id'),
+                    'recipe_id': _first_present(recipe, 'recipe_id', 'workflow_id'),
                     'recipe_variant_id': _first_present(variant, 'recipe_variant_id', 'workflow_variant_id'),
                     'recipe_type': _first_present(variant, 'recipe_type', 'workflow_type'),
                     'order_family_id': family['order_family_id'],
@@ -947,7 +947,7 @@ def _materialize_order_family(
     enough_groups = sensitive_group_count >= args.min_order_sensitive_groups
     return selected_rows if enough_groups else [], {
         'domain': domain,
-        'recipe_id': _first_present(workflow, 'recipe_id', 'workflow_id'),
+        'recipe_id': _first_present(recipe, 'recipe_id', 'workflow_id'),
         'order_family_id': family['order_family_id'],
         'filter_name': filter_name,
         'status': 'kept' if enough_groups else 'skipped_not_order_sensitive_enough',
@@ -969,7 +969,7 @@ def main() -> None:
     parser.add_argument('--recipe-library-dir', '--workflow-library-dir', dest='recipe_library_dir', default='data/processed/recipe_library')
     parser.add_argument('--filtered-path', default='data/processed/domain_filtered/all.jsonl')
     parser.add_argument('--output-dir', default='data/processed/benchmark_instances')
-    parser.add_argument('--max-candidate-records', type=int, default=0, help='Candidate cap per workflow/order family; 0 means no cap.')
+    parser.add_argument('--max-candidate-records', type=int, default=0, help='Candidate cap per recipe/order family; 0 means no cap.')
     parser.add_argument('--max-instances-per-variant', type=int, default=20)
     parser.add_argument('--max-order-groups-per-family', type=int, default=10)
     parser.add_argument('--min-keep', type=int, default=5)
@@ -1007,13 +1007,13 @@ def main() -> None:
     args = parser.parse_args()
 
     root = ROOT
-    workflow_library_dir = (root / args.recipe_library_dir).resolve()
+    recipe_library_dir = (root / args.recipe_library_dir).resolve()
     filtered_path = (root / args.filtered_path).resolve()
     output_dir = (root / args.output_dir).resolve()
     cache_dir = output_dir / '_materialize_cache_v2'
 
-    if not workflow_library_dir.exists():
-        raise SystemExit(f'recipe library dir not found: {workflow_library_dir}')
+    if not recipe_library_dir.exists():
+        raise SystemExit(f'recipe library dir not found: {recipe_library_dir}')
     if not filtered_path.exists():
         raise SystemExit(f'filtered corpus not found: {filtered_path}')
     if not 0.0 < args.target_drop_rate < 1.0:
@@ -1043,8 +1043,8 @@ def main() -> None:
         + ', '.join(f'{domain}={len(records)}' for domain, records in sorted(records_by_domain.items()))
     )
 
-    domain_workflows = _load_domain_workflows(workflow_library_dir)
-    _log(f'loaded recipe libraries for {len(domain_workflows)} domains -> {workflow_library_dir}')
+    domain_recipes = _load_domain_recipes(recipe_library_dir)
+    _log(f'loaded recipe libraries for {len(domain_recipes)} domains -> {recipe_library_dir}')
 
     main_rows: list[dict[str, Any]] = []
     order_rows: list[dict[str, Any]] = []
@@ -1070,16 +1070,16 @@ def main() -> None:
             )
             _write_cache(cache_dir, 'atomic', 'atomic_ops', atomic_rows, atomic_summary_rows)
 
-    for domain_index, (domain, domain_yaml) in enumerate(sorted(domain_workflows.items()), start=1):
-        workflows = list(domain_yaml.get('recipes') or domain_yaml.get('workflows') or [])
+    for domain_index, (domain, domain_yaml) in enumerate(sorted(domain_recipes.items()), start=1):
+        recipes = list(domain_yaml.get('recipes') or domain_yaml.get('workflows') or [])
         records = records_by_domain.get(domain, [])
-        _log(f'[{domain_index}/{len(domain_workflows)}] {domain}: {len(workflows)} recipes, {len(records)} records')
-        for workflow_index, workflow in enumerate(workflows, start=1):
-            workflow_id = _first_present(workflow, 'recipe_id', 'workflow_id')
-            main_variants = list(workflow.get('main_recipe_variants') or workflow.get('main_workflow_variants') or [])
-            order_families = list(workflow.get('order_sensitivity_families') or [])
+        _log(f'[{domain_index}/{len(domain_recipes)}] {domain}: {len(recipes)} recipes, {len(records)} records')
+        for recipe_index, recipe in enumerate(recipes, start=1):
+            recipe_id = _first_present(recipe, 'recipe_id', 'workflow_id')
+            main_variants = list(recipe.get('main_recipe_variants') or recipe.get('main_workflow_variants') or [])
+            order_families = list(recipe.get('order_sensitivity_families') or [])
             _log(
-                f'  [{workflow_index}/{len(workflows)}] {domain}/{workflow_id}: '
+                f'  [{recipe_index}/{len(recipes)}] {domain}/{recipe_id}: '
                 f'{len(main_variants)} main variants, {len(order_families)} order families'
             )
             for variant in main_variants:
@@ -1091,7 +1091,7 @@ def main() -> None:
                 else:
                     rows, summary = _materialize_main_variant(
                         domain,
-                        workflow,
+                        recipe,
                         variant,
                         records,
                         operators_by_name,
@@ -1116,7 +1116,7 @@ def main() -> None:
                 else:
                     rows, summary = _materialize_order_family(
                         domain,
-                        workflow,
+                        recipe,
                         family,
                         records,
                         operators_by_name,

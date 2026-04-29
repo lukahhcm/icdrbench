@@ -2,7 +2,7 @@
 
 **CDR-Bench: Benchmarking LLMs for Compositional Data Refinement**
 
-This repository builds CDR-Bench data from raw JSONL corpora using a repo-local Data-Juicer checkout. The current pipeline downloads raw data, tags operator activity, mines domain workflows, materializes workflow variants, and generates deterministic references for the main, order-sensitivity, and atomic calibration sets.
+This repository builds CDR-Bench data from raw JSONL corpora using a repo-local Data-Juicer checkout. The current pipeline downloads raw data, tags operator activity, mines domain recipes, materializes recipe variants, and generates deterministic references for the main, order-sensitivity, and atomic calibration sets.
 
 The repository and package are now named `cdrbench`.
 
@@ -12,8 +12,8 @@ Run the full construction flow in this order:
 
 1. Download raw JSONL files into `data/raw/`.
 2. Run Data-Juicer CLI tagging with `tag_and_assign_domains.py`.
-3. Mine per-domain workflow candidates with `mine_domain_workflows.py`.
-4. Materialize workflow libraries with `materialize_domain_workflows.py`.
+3. Mine per-domain recipe candidates with `mine_domain_recipes.py`.
+4. Materialize recipe libraries with `materialize_domain_recipes.py`.
 5. Generate benchmark instances and deterministic references with `materialize_benchmark_instances.py`.
 
 The final benchmark files are written under `data/benchmark/`.
@@ -104,12 +104,12 @@ Notes:
 ## 5. Mine Recipe Candidates
 
 ```bash
-PYTHONPATH=src .venv-ops/bin/python -m cdrbench.prepare_data.mine_domain_workflows \
+PYTHONPATH=src .venv-ops/bin/python -m cdrbench.prepare_data.mine_domain_recipes \
   --tagged-dir data/processed/domain_tags \
   --output-dir data/processed/recipe_mining
 ```
 
-By default, a concrete recipe candidate needs at least `5` supporting samples. Adjust this with `--min-workflow-support`.
+By default, a concrete recipe candidate needs at least `5` supporting samples. Adjust this with `--min-recipe-support`.
 
 Key outputs:
 
@@ -131,8 +131,8 @@ Fallback recipe candidates are kept for inspection but excluded from benchmark m
 ## 6. Materialize Recipe Libraries
 
 ```bash
-PYTHONPATH=src .venv-ops/bin/python -m cdrbench.prepare_data.materialize_domain_workflows \
-  --workflow-mining-dir data/processed/recipe_mining \
+PYTHONPATH=src .venv-ops/bin/python -m cdrbench.prepare_data.materialize_domain_recipes \
+  --recipe-mining-dir data/processed/recipe_mining \
   --filtered-path data/processed/domain_filtered/all.jsonl \
   --output-dir data/processed/recipe_library \
   --resume
@@ -145,7 +145,7 @@ This step:
 - scans filter statistics at each checkpoint
 - produces main-track variants and order-sensitivity families
 
-Main-track workflow types:
+Main-track recipe types:
 
 - `clean-only`
 - `filter-then-clean`
@@ -178,7 +178,7 @@ column -s, -t < data/processed/recipe_library/web/checkpoint_filter_stats.csv | 
 
 ```bash
 PYTHONPATH=src .venv-ops/bin/python -m cdrbench.prepare_data.materialize_benchmark_instances \
-  --workflow-library-dir data/processed/recipe_library \
+  --recipe-library-dir data/processed/recipe_library \
   --filtered-path data/processed/domain_filtered/all.jsonl \
   --output-dir data/benchmark \
   --target-drop-rate 0.5 \
@@ -218,10 +218,10 @@ Target scale:
 Important parameters:
 
 - `--target-drop-rate 0.5`: calibrate filter tasks toward 50% `KEEP` and 50% `DROP`
-- `--max-candidate-records 0`: scan all eligible candidate samples per workflow variant or order family; set a positive number such as `2000` for a faster capped run
+- `--max-candidate-records 0`: scan all eligible candidate samples per recipe variant or order family; set a positive number such as `2000` for a faster capped run
 - `--max-input-chars 50000`: skip raw inputs above 50k characters before GT materialization, keeping tasks within a practical prompt budget for recent strong models; use `0` to disable
 - `--min-positive-ratio-threshold 0.001`: when a calibrated ratio threshold is exactly `0`, first try a small positive threshold instead of creating an unnatural zero-ratio task
-- `--max-instances-per-variant 50`: cap main-track instances per workflow variant
+- `--max-instances-per-variant 50`: cap main-track instances per recipe variant
 - `--max-order-groups-per-family 30`: cap order groups per order family
 - `--max-atomic-candidate-records 1000`: scan at most 1000 candidates per atomic operator
 - `--max-atomic-instances-per-op 10`: cap atomic instances per operator
@@ -231,14 +231,14 @@ Important parameters:
 - `--zero-ratio-threshold-policy min-positive`: use `0.001` for degenerate calibrated ratio thresholds and let normal keep/drop balance checks decide whether to keep the variant; use `skip` to drop such variants immediately
 - `--resume`: reuse per-variant cache shards in `data/benchmark/_materialize_cache_v2/` after an interrupted run
 
-Thresholds are recalibrated during materialization. Length/count thresholds are rounded to human-readable values such as 5, 10, 50, 100, and 1000. Ratios usually use a 0.01 grid, while very small ratios may keep finer 0.001 or 0.0001 grids. Final row selection is best-effort diversity-aware: rows from source records that have already been selected by earlier workflows are deprioritized.
+Thresholds are recalibrated during materialization. Length/count thresholds are rounded to human-readable values such as 5, 10, 50, 100, and 1000. Ratios usually use a 0.01 grid, while very small ratios may keep finer 0.001 or 0.0001 grids. Final row selection is best-effort diversity-aware: rows from source records that have already been selected by earlier recipes are deprioritized.
 
 ## 8. How to Read the Outputs
 
 Main benchmark:
 
 - `main.jsonl` contains one task per row.
-- `workflow_type` tells whether the row is `clean-only`, `filter-then-clean`, or `clean-then-filter`.
+- `recipe_type` tells whether the row is `clean-only`, `filter-then-clean`, or `clean-then-filter`.
 - `reference_status` and `reference_text` are the deterministic GT.
 - Workflow length can be recovered from the operator sequence fields in each row.
 - `input_length_chars` and `input_length_bucket` support difficulty analysis without splitting the main benchmark by length.
@@ -281,7 +281,7 @@ If you want a quick paper-style overview of what the benchmark is made of, gener
 ```bash
 PYTHONPATH=src .venv-ops/bin/python -m cdrbench.reporting.plot_benchmark_composition \
   --benchmark-dir data/benchmark \
-  --workflow-library-dir data/processed/recipe_library \
+  --recipe-library-dir data/processed/recipe_library \
   --output-dir data/paper_stats/plots
 ```
 
@@ -293,9 +293,9 @@ Outputs:
 
 The overview figure shows:
 
-- workflow-library domain composition
+- recipe-library domain composition
 - main-track domain composition
-- main-track workflow-type composition
+- main-track recipe-type composition
 - main-variant `kept / skipped` status composition
 - order-sensitive group composition by domain
 - order-family `kept / skipped` status composition
@@ -314,7 +314,7 @@ Use the bundled orchestration script to run the full prompt pipeline for all thr
 
 The script performs three steps for each track:
 
-1. generate workflow-level prompt candidates
+1. generate recipe-level prompt candidates
 2. judge and keep only accepted prompts
 3. combine the accepted prompt pool with benchmark rows to build eval-ready files
 
@@ -328,7 +328,7 @@ This default uses the repo's current LLM defaults:
 
 - base URL: `http://123.57.212.178:3333/v1`
 - model: `gpt-5.4`
-- workflow-level resume cache: enabled
+- recipe-level resume cache: enabled
 
 Set an API key before running:
 
@@ -356,7 +356,7 @@ Useful overrides:
 
 ## 10. Atomic Evaluation
 
-Atomic evaluation now follows a two-step workflow:
+Atomic evaluation now follows a two-step recipe:
 
 1. `infer`: call a model API and save raw outputs for all prompt variants
 2. `score`: recompute metrics from saved predictions without rerunning the model
@@ -523,7 +523,7 @@ This means natural-language diversity comes from the requirement body, while the
 The default generation flow hides operator names and parameter names from the user-facing requirement, while still preserving:
 
 - `data/processed/recipe_library/<domain>/recipe_library.yaml`
-- `configs/workflow_prompting.yaml`
+- `configs/recipe_prompting.yaml`
 - `data/benchmark/*.jsonl`
 
 The generated requirement candidates should preserve:
@@ -533,17 +533,17 @@ The generated requirement candidates should preserve:
 - natural threshold semantics when needed
 - stylistic diversity across different users
 
-Current style pool includes imperative checklist, goal-oriented description, application-context task, quality-control request, analyst handoff, concise brief, policy-like requirement, workflow narrative, end-weighted instruction, negative-constraint driven, and conversational cooperative styles.
+Current style pool includes imperative checklist, goal-oriented description, application-context task, quality-control request, analyst handoff, concise brief, policy-like requirement, recipe narrative, end-weighted instruction, negative-constraint driven, and conversational cooperative styles.
 
-By default, prompt generation skips workflows containing `flagged_words_filter` and `stopwords_filter`.
+By default, prompt generation skips recipes containing `flagged_words_filter` and `stopwords_filter`.
 
 Notes:
 
-- Prompt generation is grouped by workflow signature rather than by individual sample, so all samples sharing the same workflow reuse the same accepted prompt pool.
+- Prompt generation is grouped by recipe signature rather than by individual sample, so all samples sharing the same recipe reuse the same accepted prompt pool.
 - Each sample keeps a deterministic subset of `3` accepted prompt styles for direct evaluation.
 - `prompt_generation_summary.jsonl` is the check file for accepted prompt-pool coverage.
 - `prompt_eval_build_summary.jsonl` is the check file for final eval-row coverage.
-- `--resume` reuses the workflow-level cache so interrupted runs can continue without starting from scratch.
+- `--resume` reuses the recipe-level cache so interrupted runs can continue without starting from scratch.
 
 ## 10. Troubleshooting Data-Juicer Imports
 

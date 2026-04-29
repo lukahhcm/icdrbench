@@ -242,31 +242,31 @@ fi
 "${tagging_cmd[@]}"
 
 echo "[stage 2/5] mine recipe families"
-"$PYTHON_BIN" -m cdrbench.prepare_data.mine_domain_workflows \
+"$PYTHON_BIN" -m cdrbench.prepare_data.mine_domain_recipes \
   --tagged-dir "$TAGGED_DIR" \
   --domains-config "$DOMAINS_CONFIG" \
   --output-dir "$RECIPE_MINING_OUTPUT_DIR" \
   --domain-field assigned_domain \
   --min-active-mappers 2 \
   --min-support 5 \
-  --min-workflow-support 5 \
+  --min-recipe-support 5 \
   --min-support-ratio 0.02 \
   --min-combo-len 2 \
   --max-combo-len 5 \
   --top-k 50 \
   --max-families-per-domain 6 \
-  --max-workflows-per-family 8 \
+  --max-recipes-per-family 8 \
   --max-text-length "$MAX_TEXT_LENGTH"
 
 echo "[stage 3/5] materialize deterministic recipe libraries"
-"$PYTHON_BIN" -m cdrbench.prepare_data.materialize_domain_workflows \
-  --workflow-mining-dir "$RECIPE_MINING_OUTPUT_DIR" \
+"$PYTHON_BIN" -m cdrbench.prepare_data.materialize_domain_recipes \
+  --recipe-mining-dir "$RECIPE_MINING_OUTPUT_DIR" \
   --filtered-path "$FILTERED_OUTPUT_DIR/all.jsonl" \
   --output-dir "$RECIPE_LIBRARY_OUTPUT_DIR"
 
 echo "[stage 4/5] materialize benchmark instances and deterministic references"
 "$PYTHON_BIN" -m cdrbench.prepare_data.materialize_benchmark_instances \
-  --workflow-library-dir "$RECIPE_LIBRARY_OUTPUT_DIR" \
+  --recipe-library-dir "$RECIPE_LIBRARY_OUTPUT_DIR" \
   --filtered-path "$FILTERED_OUTPUT_DIR/all.jsonl" \
   --output-dir "$BENCHMARK_OUTPUT_DIR" \
   --target-drop-rate 0.5 \

@@ -130,7 +130,7 @@ def _assign_signature_to_family(
     return best_idx
 
 
-def _select_cover_workflows(
+def _select_cover_recipes(
     exact_counts: Counter[tuple[str, ...]],
     max_candidates: int,
 ) -> list[tuple[str, ...]]:
@@ -160,13 +160,13 @@ def _build_domain_report(
     records: list[dict[str, Any]],
     domain_cfg: dict[str, Any],
     min_support: int,
-    min_workflow_support: int,
+    min_recipe_support: int,
     min_support_ratio: float,
     min_combo_len: int,
     max_combo_len: int,
     top_k: int,
     max_families: int,
-    max_workflows_per_family: int,
+    max_recipes_per_family: int,
 ) -> tuple[dict[str, Any], pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     operator_sets = [_normalize_ops(row.get('active_mapper_names', [])) for row in records]
     exact_counts: Counter[tuple[str, ...]] = Counter(operator_sets)
@@ -213,8 +213,8 @@ def _build_domain_report(
             break
 
     family_rows = []
-    workflow_rows = []
-    workflow_yaml_rows = []
+    recipe_rows = []
+    recipe_yaml_rows = []
     assigned_signatures: set[tuple[str, ...]] = set()
     kept_families: list[dict[str, Any]] = []
 
@@ -233,8 +233,8 @@ def _build_domain_report(
             continue
 
         assigned.sort(key=lambda item: (-item[1], -len(item[0]), item[0]))
-        valid_assigned = [(ops, support) for ops, support in assigned if support >= min_workflow_support]
-        selected_recipes = valid_assigned[:max_workflows_per_family]
+        valid_assigned = [(ops, support) for ops, support in assigned if support >= min_recipe_support]
+        selected_recipes = valid_assigned[:max_recipes_per_family]
         if not selected_recipes:
             continue
         family_support = sum(support for _, support in assigned)
@@ -268,7 +268,7 @@ def _build_domain_report(
         yaml_recipes = []
         for recipe_rank, (ops, support) in enumerate(selected_recipes, start=1):
             recipe_id = f'{domain}_recipe_{kept_family_idx:02d}_{recipe_rank:02d}'
-            workflow_rows.append(
+            recipe_rows.append(
                 {
                     'domain': domain,
                     'family_id': family_id,
@@ -292,7 +292,7 @@ def _build_domain_report(
                 }
             )
 
-        workflow_yaml_rows.append(
+        recipe_yaml_rows.append(
             {
                 'family_id': family_id,
                 'anchor_operator_set': list(anchor),
@@ -307,10 +307,10 @@ def _build_domain_report(
     leftover_exact = [
         (ops, support)
         for ops, support in exact_counts.most_common()
-        if ops not in assigned_signatures and support >= min_workflow_support
+        if ops not in assigned_signatures and support >= min_recipe_support
     ]
     fallback_rows = []
-    for rank, ops in enumerate(_select_cover_workflows(dict(leftover_exact), max_candidates=min(top_k, 12)), start=1):
+    for rank, ops in enumerate(_select_cover_recipes(dict(leftover_exact), max_candidates=min(top_k, 12)), start=1):
         support = exact_counts[ops]
         fallback_rows.append(
             {
@@ -332,12 +332,12 @@ def _build_domain_report(
         'description': domain_cfg.get('description', ''),
         'num_records': num_records,
         'min_support_threshold': threshold,
-        'min_workflow_support': min_workflow_support,
+        'min_recipe_support': min_recipe_support,
         'active_operator_inventory': all_active_ops,
         'configured_specific_operators': [op['name'] for op in domain_cfg.get('specific_operators', [])],
         'source_corpora': dict(source_counter),
         'length_distribution': dict(sorted(length_counter.items())),
-        'recipe_families': workflow_yaml_rows,
+        'recipe_families': recipe_yaml_rows,
         'fallback_recipe_candidates': [
             {
                 'operators': row['operators'].split(' | '),
@@ -350,7 +350,7 @@ def _build_domain_report(
         ],
         'notes': [
             'Bottom-up mining is based on active operator sets from tagging outputs.',
-            f'Concrete recipes are only kept if support >= {min_workflow_support}.',
+            f'Concrete recipes are only kept if support >= {min_recipe_support}.',
             'Fallback recipe candidates are reported for inspection but excluded from selected_recipes.csv.',
             'Concrete recipe candidates still need manual ordering and activation-spec curation.',
         ],
@@ -361,7 +361,7 @@ def _build_domain_report(
         pd.DataFrame(exact_rows),
         pd.DataFrame(subset_rows),
         pd.DataFrame(family_rows),
-        pd.DataFrame(workflow_rows),
+        pd.DataFrame(recipe_rows),
     )
 
 
@@ -375,13 +375,13 @@ def main() -> None:
     parser.add_argument('--domain-field', choices=['assigned_domain', 'best_domain_candidate'], default='assigned_domain')
     parser.add_argument('--min-active-mappers', type=int, default=2)
     parser.add_argument('--min-support', type=int, default=5)
-    parser.add_argument('--min-workflow-support', type=int, default=5)
+    parser.add_argument('--min-recipe-support', '--min-workflow-support', dest='min_recipe_support', type=int, default=5)
     parser.add_argument('--min-support-ratio', type=float, default=0.02)
     parser.add_argument('--min-combo-len', type=int, default=2)
     parser.add_argument('--max-combo-len', type=int, default=5)
     parser.add_argument('--top-k', type=int, default=50)
     parser.add_argument('--max-families-per-domain', type=int, default=6)
-    parser.add_argument('--max-workflows-per-family', type=int, default=8)
+    parser.add_argument('--max-recipes-per-family', '--max-workflows-per-family', dest='max_recipes_per_family', type=int, default=8)
     parser.add_argument(
         '--max-text-length',
         type=int,
@@ -426,18 +426,18 @@ def main() -> None:
     for domain, records in sorted(records_by_domain.items()):
         if domain not in domain_defs:
             continue
-        report, exact_df, subset_df, family_df, workflow_df = _build_domain_report(
+        report, exact_df, subset_df, family_df, recipe_df = _build_domain_report(
             domain=domain,
             records=records,
             domain_cfg=domain_defs[domain],
             min_support=args.min_support,
-            min_workflow_support=args.min_workflow_support,
+            min_recipe_support=args.min_recipe_support,
             min_support_ratio=args.min_support_ratio,
             min_combo_len=args.min_combo_len,
             max_combo_len=args.max_combo_len,
             top_k=args.top_k,
             max_families=args.max_families_per_domain,
-            max_workflows_per_family=args.max_workflows_per_family,
+            max_recipes_per_family=args.max_recipes_per_family,
         )
 
         domain_dir = output_dir / domain
@@ -453,7 +453,7 @@ def main() -> None:
         exact_df.to_csv(domain_dir / 'exact_signatures.csv', index=False)
         subset_df.to_csv(domain_dir / 'frequent_operator_sets.csv', index=False)
         family_df.to_csv(domain_dir / 'recipe_families.csv', index=False)
-        workflow_df.to_csv(domain_dir / 'selected_recipes.csv', index=False)
+        recipe_df.to_csv(domain_dir / 'selected_recipes.csv', index=False)
 
         global_yaml['domains'][domain] = {
             'description': report['description'],
@@ -471,15 +471,15 @@ def main() -> None:
                 'num_exact_signature_candidates': len(exact_df),
                 'num_frequent_operator_sets': len(subset_df),
                 'num_recipe_families': len(family_df),
-                'num_selected_recipes': len(workflow_df),
+                'num_selected_recipes': len(recipe_df),
                 'min_support_threshold': report['min_support_threshold'],
-                'min_workflow_support': report['min_workflow_support'],
+                'min_recipe_support': report['min_recipe_support'],
             }
         )
 
         print(
             f"{domain}: records={report['num_records']}, "
-            f"families={len(family_df)}, selected_recipes={len(workflow_df)}"
+            f"families={len(family_df)}, selected_recipes={len(recipe_df)}"
         )
 
     if not summary_rows:

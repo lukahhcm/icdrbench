@@ -465,7 +465,7 @@ def aggregate_filter_results(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description='Tag corpora via Data-Juicer CLI, then aggregate per-op outputs into domain assignments and workflow-mining inputs.'
+        description='Tag corpora via Data-Juicer CLI, then aggregate per-op outputs into domain assignments and recipe-mining inputs.'
     )
     parser.add_argument('--corpora-config', default='configs/corpora.yaml')
     parser.add_argument('--domains-config', default='configs/domains.yaml')

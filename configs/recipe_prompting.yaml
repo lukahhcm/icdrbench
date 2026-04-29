@@ -7,8 +7,8 @@ global_prompting_rules:
   preserve_operator_order: true
   note: >
     This file records operator-to-natural-language rendering hints for
-    workflow-to-prompt generation. The generator combines the operator
-    descriptions in workflow order and appends the CDR-Bench JSON output
+    recipe-to-prompt generation. The generator combines the operator
+    descriptions in recipe order and appends the CDR-Bench JSON output
     contract.
 
 prompt_styles:
