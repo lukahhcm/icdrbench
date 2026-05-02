@@ -491,6 +491,32 @@ def _group_rows_by_instance_id(rows: list[dict[str, Any]], key: str = 'instance_
     return grouped
 
 
+def _first_non_empty_str(*values: Any) -> str | None:
+    for value in values:
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return None
+
+
+def _infer_score_labels_from_predictions(prediction_rows: list[dict[str, Any]]) -> tuple[str | None, str | None]:
+    for prediction_row in prediction_rows:
+        model = _first_non_empty_str(prediction_row.get('request_model'))
+        base_url = _first_non_empty_str(prediction_row.get('request_base_url'))
+        if model or base_url:
+            return model, base_url
+
+        for variant_prediction in _normalize_variant_predictions(prediction_row):
+            model = _first_non_empty_str(variant_prediction.get('request_model'))
+            base_url = _first_non_empty_str(variant_prediction.get('request_base_url'))
+            if model or base_url:
+                return model, base_url
+
+    return None, None
+
+
 def _safe_mean(values: list[float]) -> float:
     return sum(values) / len(values) if values else 0.0
 
@@ -1026,6 +1052,9 @@ def _score(args: argparse.Namespace) -> None:
     output_dir = (ROOT / args.output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     prediction_rows = _read_jsonl(predictions_path)
+    inferred_model, inferred_base_url = _infer_score_labels_from_predictions(prediction_rows)
+    summary_model = args.model if args.model is not None else inferred_model
+    summary_base_url = args.base_url if args.base_url is not None else inferred_base_url
 
     existing_instance_rows_by_id: dict[str, dict[str, Any]] = {}
     existing_variant_rows_by_id: dict[str, list[dict[str, Any]]] = {}
@@ -1045,133 +1074,18 @@ def _score(args: argparse.Namespace) -> None:
     reused_instance_count = 0
     new_instance_count = 0
     started = time.time()
-    if args.benchmark_path:
-        benchmark_rows = _read_jsonl((ROOT / args.benchmark_path).resolve())
-        print(
-            f'start score track={_track_name_from_path((ROOT / args.benchmark_path).resolve())} '
-            f'num_instances={len(benchmark_rows)} progress_every={args.progress_every} resume={bool(args.resume)}',
-            flush=True,
-        )
-        benchmark_map = {str(row.get('instance_id') or ''): row for row in benchmark_rows if row.get('instance_id')}
-        unexpected_prediction_count = 0
-        seen_prediction_ids = set()
-        missing_prediction_count = 0
-
-        for prediction_row in prediction_rows:
-            prediction_instance_id = str(prediction_row.get(args.prediction_instance_field) or '')
-            if prediction_instance_id:
-                seen_prediction_ids.add(prediction_instance_id)
-                if prediction_instance_id not in benchmark_map:
-                    unexpected_prediction_count += 1
-
-        for benchmark_row in benchmark_rows:
-            instance_id = str(benchmark_row.get('instance_id') or '')
-            if args.resume and instance_id in existing_instance_rows_by_id:
-                instance_rows.append(existing_instance_rows_by_id[instance_id])
-                scored_variant_rows.extend(existing_variant_rows_by_id.get(instance_id, []))
-                reused_instance_count += 1
-                current_count = reused_instance_count + new_instance_count
-                if current_count % args.progress_every == 0 or current_count == len(benchmark_rows):
-                    elapsed = time.time() - started
-                    print(
-                        f'progress score instance={current_count}/{len(benchmark_rows)} '
-                        f'reused_instances={reused_instance_count} new_instances={new_instance_count} '
-                        f'elapsed_sec={elapsed:.1f}',
-                        flush=True,
-                    )
-                continue
-            prediction_row = next(
-                (row for row in prediction_rows if str(row.get(args.prediction_instance_field) or '') == instance_id),
-                None,
-            )
-            if prediction_row is None:
-                missing_prediction_count += 1
-                instance_row = {
-                    **_base_inference_row(benchmark_row),
-                    'num_prompt_variants': 0,
-                    'mean_rs': 0.0,
-                    'rs_at_k': False,
-                    'mean_rg': 0.0,
-                    'prompt_variant_metrics': [],
-                    'recipe_success_prompt0': False,
-                    'missing_prediction': True,
-                }
-                instance_rows.append(instance_row)
-                new_instance_count += 1
-                current_count = reused_instance_count + new_instance_count
-                if current_count % args.progress_every == 0 or current_count == len(benchmark_rows):
-                    elapsed = time.time() - started
-                    print(
-                        f'progress score instance={current_count}/{len(benchmark_rows)} '
-                        f'reused_instances={reused_instance_count} new_instances={new_instance_count} '
-                        f'elapsed_sec={elapsed:.1f}',
-                        flush=True,
-                    )
-                continue
-
-            merged_row = {**benchmark_row, **prediction_row}
-            instance_variant_rows = _score_rows_from_inference_row(
-                merged_row,
-                explicit_status_field=args.prediction_status_field,
-                explicit_text_field=args.prediction_text_field,
-            )
-            scored_variant_rows.extend(instance_variant_rows)
-            instance_row = _aggregate_instance_metrics(benchmark_row, instance_variant_rows)
-            instance_row['missing_prediction'] = False
-            instance_rows.append(instance_row)
-            new_instance_count += 1
-            current_count = reused_instance_count + new_instance_count
-            if current_count % args.progress_every == 0 or current_count == len(benchmark_rows):
-                elapsed = time.time() - started
-                print(
-                    f'progress score instance={current_count}/{len(benchmark_rows)} '
-                    f'reused_instances={reused_instance_count} new_instances={new_instance_count} '
-                    f'elapsed_sec={elapsed:.1f}',
-                    flush=True,
-                )
-
-        order_group_rows = _build_order_group_rows(instance_rows)
-        summary = _build_instance_summary(
-            instance_rows,
-            track_name=_track_name_from_path((ROOT / args.benchmark_path).resolve()),
-            model_name=args.model,
-            base_url=args.base_url,
-            variant_rows=scored_variant_rows,
-            order_group_rows=order_group_rows,
-        )
-        summary['missing_prediction_count'] = missing_prediction_count
-        summary['unexpected_prediction_count'] = unexpected_prediction_count
-    else:
-        total_rows = len(prediction_rows)
-        print(
-            f'start score track={_track_name_from_path(predictions_path)} '
-            f'num_instances={total_rows} progress_every={args.progress_every} resume={bool(args.resume)}',
-            flush=True,
-        )
-        for index, prediction_row in enumerate(prediction_rows, start=1):
-            instance_id = str(prediction_row.get(args.prediction_instance_field) or prediction_row.get('instance_id') or '')
-            if args.resume and instance_id in existing_instance_rows_by_id:
-                instance_rows.append(existing_instance_rows_by_id[instance_id])
-                scored_variant_rows.extend(existing_variant_rows_by_id.get(instance_id, []))
-                reused_instance_count += 1
-                current_count = reused_instance_count + new_instance_count
-                if current_count % args.progress_every == 0 or current_count == total_rows:
-                    elapsed = time.time() - started
-                    print(
-                        f'progress score instance={current_count}/{total_rows} '
-                        f'reused_instances={reused_instance_count} new_instances={new_instance_count} '
-                        f'elapsed_sec={elapsed:.1f}',
-                        flush=True,
-                    )
-                continue
-            instance_variant_rows = _score_rows_from_inference_row(
-                prediction_row,
-                explicit_status_field=args.prediction_status_field,
-                explicit_text_field=args.prediction_text_field,
-            )
-            scored_variant_rows.extend(instance_variant_rows)
-            instance_rows.append(_aggregate_instance_metrics(prediction_row, instance_variant_rows))
-            new_instance_count += 1
+    total_rows = len(prediction_rows)
+    print(
+        f'start score track={_track_name_from_path(predictions_path)} '
+        f'num_instances={total_rows} progress_every={args.progress_every} resume={bool(args.resume)}',
+        flush=True,
+    )
+    for index, prediction_row in enumerate(prediction_rows, start=1):
+        instance_id = str(prediction_row.get('instance_id') or '')
+        if args.resume and instance_id in existing_instance_rows_by_id:
+            instance_rows.append(existing_instance_rows_by_id[instance_id])
+            scored_variant_rows.extend(existing_variant_rows_by_id.get(instance_id, []))
+            reused_instance_count += 1
             current_count = reused_instance_count + new_instance_count
             if current_count % args.progress_every == 0 or current_count == total_rows:
                 elapsed = time.time() - started
@@ -1181,15 +1095,33 @@ def _score(args: argparse.Namespace) -> None:
                     f'elapsed_sec={elapsed:.1f}',
                     flush=True,
                 )
-        order_group_rows = _build_order_group_rows(instance_rows)
-        summary = _build_instance_summary(
-            instance_rows,
-            track_name=_track_name_from_path(predictions_path),
-            model_name=args.model,
-            base_url=args.base_url,
-            variant_rows=scored_variant_rows,
-            order_group_rows=order_group_rows,
+            continue
+        instance_variant_rows = _score_rows_from_inference_row(
+            prediction_row,
+            explicit_status_field=None,
+            explicit_text_field=None,
         )
+        scored_variant_rows.extend(instance_variant_rows)
+        instance_rows.append(_aggregate_instance_metrics(prediction_row, instance_variant_rows))
+        new_instance_count += 1
+        current_count = reused_instance_count + new_instance_count
+        if current_count % args.progress_every == 0 or current_count == total_rows:
+            elapsed = time.time() - started
+            print(
+                f'progress score instance={current_count}/{total_rows} '
+                f'reused_instances={reused_instance_count} new_instances={new_instance_count} '
+                f'elapsed_sec={elapsed:.1f}',
+                flush=True,
+            )
+    order_group_rows = _build_order_group_rows(instance_rows)
+    summary = _build_instance_summary(
+        instance_rows,
+        track_name=_track_name_from_path(predictions_path),
+        model_name=summary_model,
+        base_url=summary_base_url,
+        variant_rows=scored_variant_rows,
+        order_group_rows=order_group_rows,
+    )
 
     _write_jsonl(output_dir / 'scored_variant_predictions.jsonl', scored_variant_rows)
     _write_jsonl(output_dir / 'instance_metrics.jsonl', instance_rows)
@@ -1252,13 +1184,9 @@ def main() -> None:
         infer_parser._add_action(action)
     infer_parser.set_defaults(func=_predict)
 
-    score_parser = subparsers.add_parser('score', help='Score existing prediction JSONL against benchmark references.')
+    score_parser = subparsers.add_parser('score', help='Score existing prediction JSONL and write reports.')
     score_parser.add_argument('--predictions-path', required=True)
-    score_parser.add_argument('--benchmark-path', default=None)
     score_parser.add_argument('--output-dir', required=True)
-    score_parser.add_argument('--prediction-instance-field', default='instance_id')
-    score_parser.add_argument('--prediction-status-field', default=None)
-    score_parser.add_argument('--prediction-text-field', default=None)
     score_parser.add_argument('--model', default=None)
     score_parser.add_argument('--base-url', default=None)
     score_parser.add_argument('--progress-every', type=int, default=DEFAULT_PROGRESS_EVERY)

@@ -381,23 +381,17 @@ Then score the saved predictions:
 ```bash
 ./scripts/score_benchmark_tracks.sh \
   --tracks atomic_ops \
-  --benchmark-dir data/benchmark \
-  --predictions-root data/inference_runs/gpt54 \
-  --output-root data/score_runs/gpt54 \
-  --model gpt-5.4
+  --predictions-root data/inference_runs/gpt54
 ```
 
-If you already have an existing predictions tree, you can run the scoring step alone. If the prediction file uses non-default field names, override them:
+The scorer reads `predictions.jsonl` and writes report files directly into the same per-track directory.
+
+If you already have an existing predictions tree, you can run the scoring step alone:
 
 ```bash
 ./scripts/score_benchmark_tracks.sh \
   --tracks atomic_ops \
-  --benchmark-dir data/benchmark \
-  --predictions-root /path/to/inference_root \
-  --output-root data/score_runs/atomic_existing \
-  --model gpt-5.4 \
-  --prediction-status-field status \
-  --prediction-text-field clean_text
+  --predictions-root /path/to/inference_root
 ```
 
 The scorer now writes compact report files by default:
@@ -439,10 +433,17 @@ Then run the two-step atomic evaluation against the local server:
 
 ./scripts/score_benchmark_tracks.sh \
   --tracks atomic_ops \
-  --benchmark-dir data/benchmark \
-  --predictions-root data/inference_runs/local_model \
-  --output-root data/score_runs/local_model \
-  --model local-model
+  --predictions-root data/inference_runs/local_model
+```
+
+If you prefer fixed per-model wrappers, use the scripts under `scripts/evaluation/`, for example:
+
+```bash
+bash scripts/evaluation/infer_qwen3_5_9b.sh
+bash scripts/evaluation/score_qwen3_5_9b.sh
+
+bash scripts/evaluation/infer_gpt_5_4.sh
+bash scripts/evaluation/score_gpt_5_4.sh
 ```
 
 The local launcher intentionally reuses the same `ref`-style startup pattern used in earlier experiments:
@@ -512,7 +513,7 @@ Useful variants:
 ./scripts/eval_benchmark_all_tracks.sh --score-only --predictions-root /path/to/predictions_root
 ```
 
-Per-track outputs are written under:
+Per-track outputs are written under the inference root:
 
 - `data/eval_runs/<run_name>/atomic_ops/`
 - `data/eval_runs/<run_name>/main/`

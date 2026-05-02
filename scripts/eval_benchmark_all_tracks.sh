@@ -19,11 +19,9 @@ Modes:
   3. score only from existing prediction files
 
 Options:
-  --benchmark-dir <path>             Optional fallback benchmark root for non-self-contained predictions. Default: unset
   --eval-root <path>                 Final self-contained benchmark root. Default: data/benchmark
   --infer-root <path>                Inference output root. Default: data/evaluation/infer/all_tracks
-  --score-root <path>                Score output root. Default: data/evaluation/score/all_tracks
-  --output-root <path>               Legacy alias: set both infer-root and score-root to the same root
+  --output-root <path>               Legacy alias: same as --infer-root
   --predictions-root <path>          Existing predictions root for score-only mode. Default: --infer-root
   --tracks <csv>                     Comma-separated tracks. Default: atomic_ops,main,order_sensitivity
   --model <name>                     API model name. Required unless --score-only
@@ -37,29 +35,23 @@ Options:
   --resume                           Resume predictions from existing per-track files
   --predict-only                     Only run inference, skip scoring
   --score-only                       Only score existing prediction files
-  --prediction-instance-field <key>  Score-only override. Default: instance_id
-  --prediction-status-field <key>    Score-only override for prediction status field
-  --prediction-text-field <key>      Score-only override for prediction clean-text field
   -h, --help                         Show this help
 
 Examples:
   ./scripts/eval_benchmark_all_tracks.sh \
     --model gpt-5.4 \
     --base-url http://123.57.212.178:3333/v1 \
-    --infer-root data/evaluation/infer/gpt54_all \
-    --score-root data/evaluation/score/gpt54_all
+    --infer-root data/evaluation/infer/gpt54_all
 
   ./scripts/eval_benchmark_all_tracks.sh \
     --model local-model \
     --base-url http://127.0.0.1:8000/v1 \
     --api-key EMPTY \
-    --infer-root data/evaluation/infer/local_model_all \
-    --score-root data/evaluation/score/local_model_all
+    --infer-root data/evaluation/infer/local_model_all
 
   ./scripts/eval_benchmark_all_tracks.sh \
     --score-only \
-    --predictions-root /path/to/predictions_root \
-    --score-root data/evaluation/score/scored_server_predictions
+    --predictions-root /path/to/predictions_root
 EOF
 }
 
@@ -72,10 +64,8 @@ if [[ ! -x "$PYTHON_BIN" ]]; then
   PYTHON_BIN="python3"
 fi
 
-BENCHMARK_DIR=""
 EVAL_ROOT="data/benchmark"
 INFER_ROOT="data/evaluation/infer/all_tracks"
-SCORE_ROOT="data/evaluation/score/all_tracks"
 PREDICTIONS_ROOT=""
 TRACKS_CSV="atomic_ops,main,order_sensitivity"
 MODEL=""
@@ -89,16 +79,9 @@ CONCURRENCY="1"
 RESUME="false"
 PREDICT_ONLY="false"
 SCORE_ONLY="false"
-PREDICTION_INSTANCE_FIELD="instance_id"
-PREDICTION_STATUS_FIELD=""
-PREDICTION_TEXT_FIELD=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --benchmark-dir)
-      BENCHMARK_DIR="$2"
-      shift 2
-      ;;
     --eval-root)
       EVAL_ROOT="$2"
       shift 2
@@ -107,13 +90,8 @@ while [[ $# -gt 0 ]]; do
       INFER_ROOT="$2"
       shift 2
       ;;
-    --score-root)
-      SCORE_ROOT="$2"
-      shift 2
-      ;;
     --output-root)
       INFER_ROOT="$2"
-      SCORE_ROOT="$2"
       shift 2
       ;;
     --predictions-root)
@@ -167,18 +145,6 @@ while [[ $# -gt 0 ]]; do
     --score-only)
       SCORE_ONLY="true"
       shift 1
-      ;;
-    --prediction-instance-field)
-      PREDICTION_INSTANCE_FIELD="$2"
-      shift 2
-      ;;
-    --prediction-status-field)
-      PREDICTION_STATUS_FIELD="$2"
-      shift 2
-      ;;
-    --prediction-text-field)
-      PREDICTION_TEXT_FIELD="$2"
-      shift 2
       ;;
     -h|--help)
       usage
@@ -248,11 +214,10 @@ track_eval_path() {
 for track in "${TRACKS[@]}"; do
   eval_path="$(track_eval_path "$track")"
   track_infer_dir="$INFER_ROOT/$track"
-  track_score_dir="$SCORE_ROOT/$track"
   track_predictions_dir="$PREDICTIONS_ROOT/$track"
   predictions_path="$track_predictions_dir/predictions.jsonl"
 
-  mkdir -p "$track_infer_dir" "$track_score_dir"
+  mkdir -p "$track_infer_dir"
 
   if [[ "$SCORE_ONLY" != "true" ]]; then
     if [[ ! -f "$eval_path" ]]; then
@@ -294,36 +259,17 @@ for track in "${TRACKS[@]}"; do
     score_cmd=(
       "$PYTHON_BIN" -m cdrbench.eval.run_benchmark_eval score
       --predictions-path "$predictions_path"
-      --output-dir "$track_score_dir"
-      --prediction-instance-field "$PREDICTION_INSTANCE_FIELD"
+      --output-dir "$(dirname "$predictions_path")"
+      --progress-every 20
     )
-    if [[ -n "$BENCHMARK_DIR" ]]; then
-      benchmark_path="$(track_benchmark_path "$track")"
-      if [[ ! -f "$benchmark_path" ]]; then
-        echo "Missing benchmark file for track=$track: $benchmark_path" >&2
-        exit 1
-      fi
-      score_cmd+=(--benchmark-path "$benchmark_path")
-    fi
-    if [[ -n "$MODEL" ]]; then
-      score_cmd+=(--model "$MODEL")
-    fi
-    if [[ -n "$BASE_URL" ]]; then
-      score_cmd+=(--base-url "$BASE_URL")
-    fi
-    if [[ -n "$PREDICTION_STATUS_FIELD" ]]; then
-      score_cmd+=(--prediction-status-field "$PREDICTION_STATUS_FIELD")
-    fi
-    if [[ -n "$PREDICTION_TEXT_FIELD" ]]; then
-      score_cmd+=(--prediction-text-field "$PREDICTION_TEXT_FIELD")
-    fi
-    echo "[run] track=$track step=score output_dir=$track_score_dir"
+    score_output_dir="$(dirname "$predictions_path")"
+    echo "[run] track=$track step=score output_dir=$score_output_dir"
     "${score_cmd[@]}"
   fi
 
-  echo "[done] track=$track infer_dir=$track_infer_dir score_dir=$track_score_dir"
+  echo "[done] track=$track infer_dir=$track_infer_dir"
 done
 
 echo "[complete] evaluation finished for tracks: ${TRACKS[*]}"
 echo "[complete] inference rooted at: $INFER_ROOT"
-echo "[complete] scoring rooted at: $SCORE_ROOT"
+echo "[complete] reports written under predictions roots"

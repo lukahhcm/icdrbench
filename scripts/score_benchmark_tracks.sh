@@ -6,39 +6,28 @@ usage() {
 Usage:
   score_benchmark_tracks.sh [options]
 
-Score previously saved raw inference outputs for one or more CDR-Bench tracks.
+Score previously saved inference outputs for one or more CDR-Bench tracks.
 By default this script targets the two primary tracks:
 
   1. atomic_ops
   2. main
 
-This step is metric-only. It does not call the model API.
+This step only reads predictions, computes metrics, and writes reports next to `predictions.jsonl`.
 
 Options:
-  --benchmark-dir <path>              Optional fallback benchmark root for non-self-contained predictions. Default: unset
   --predictions-root <path>           Inference root. Default: data/evaluation/infer
-  --output-root <path>                Score output root. Default: data/evaluation/score
   --tracks <csv>                      Comma-separated tracks. Default: atomic_ops,main
-  --model <name>                      Optional model label for reports
-  --base-url <url>                    Optional base-url label for reports
-  --prediction-instance-field <key>   Default: instance_id
-  --prediction-status-field <key>     Optional override for prediction status field
-  --prediction-text-field <key>       Optional override for prediction clean-text field
   --progress-every <int>              Default: 20
-  --resume                            Resume scoring from existing output-dir files
+  --resume                            Resume scoring from existing report files in the same directory
   -h, --help                          Show this help
 
 Examples:
   ./scripts/score_benchmark_tracks.sh \
-    --predictions-root data/evaluation/infer/gpt54 \
-    --output-root data/evaluation/score/gpt54 \
-    --model gpt-5.4
+    --predictions-root data/evaluation/infer/gpt54
 
   ./scripts/score_benchmark_tracks.sh \
     --tracks atomic_ops,main \
-    --predictions-root data/evaluation/infer/local_model \
-    --output-root data/evaluation/score/local_model \
-    --model local-model
+    --predictions-root data/evaluation/infer/local_model
 EOF
 }
 
@@ -51,54 +40,19 @@ if [[ ! -x "$PYTHON_BIN" ]]; then
   PYTHON_BIN="python3"
 fi
 
-BENCHMARK_DIR=""
 PREDICTIONS_ROOT="data/evaluation/infer"
-OUTPUT_ROOT="data/evaluation/score"
 TRACKS_CSV="atomic_ops,main"
-MODEL=""
-BASE_URL=""
-PREDICTION_INSTANCE_FIELD="instance_id"
-PREDICTION_STATUS_FIELD=""
-PREDICTION_TEXT_FIELD=""
 PROGRESS_EVERY="20"
 RESUME="false"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --benchmark-dir)
-      BENCHMARK_DIR="$2"
-      shift 2
-      ;;
     --predictions-root)
       PREDICTIONS_ROOT="$2"
       shift 2
       ;;
-    --output-root)
-      OUTPUT_ROOT="$2"
-      shift 2
-      ;;
     --tracks)
       TRACKS_CSV="$2"
-      shift 2
-      ;;
-    --model)
-      MODEL="$2"
-      shift 2
-      ;;
-    --base-url)
-      BASE_URL="$2"
-      shift 2
-      ;;
-    --prediction-instance-field)
-      PREDICTION_INSTANCE_FIELD="$2"
-      shift 2
-      ;;
-    --prediction-status-field)
-      PREDICTION_STATUS_FIELD="$2"
-      shift 2
-      ;;
-    --prediction-text-field)
-      PREDICTION_TEXT_FIELD="$2"
       shift 2
       ;;
     --progress-every)
@@ -124,27 +78,9 @@ done
 export PYTHONPATH="$REPO_ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
 IFS=',' read -r -a TRACKS <<< "$TRACKS_CSV"
 
-track_benchmark_path() {
-  case "$1" in
-    atomic_ops)
-      printf '%s\n' "$BENCHMARK_DIR/atomic_ops/atomic_ops.jsonl"
-      ;;
-    main)
-      printf '%s\n' "$BENCHMARK_DIR/main/main.jsonl"
-      ;;
-    order_sensitivity)
-      printf '%s\n' "$BENCHMARK_DIR/order_sensitivity/order_sensitivity.jsonl"
-      ;;
-    *)
-      echo "Unsupported track: $1" >&2
-      exit 1
-      ;;
-  esac
-}
-
 for track in "${TRACKS[@]}"; do
   predictions_path="$PREDICTIONS_ROOT/$track/predictions.jsonl"
-  output_dir="$OUTPUT_ROOT/$track"
+  output_dir="$PREDICTIONS_ROOT/$track"
   mkdir -p "$output_dir"
 
   if [[ ! -f "$predictions_path" ]]; then
@@ -156,29 +92,8 @@ for track in "${TRACKS[@]}"; do
     "$PYTHON_BIN" -m cdrbench.eval.run_benchmark_eval score
     --predictions-path "$predictions_path"
     --output-dir "$output_dir"
-    --prediction-instance-field "$PREDICTION_INSTANCE_FIELD"
     --progress-every "$PROGRESS_EVERY"
   )
-  if [[ -n "$BENCHMARK_DIR" ]]; then
-    benchmark_path="$(track_benchmark_path "$track")"
-    if [[ ! -f "$benchmark_path" ]]; then
-      echo "Missing benchmark file for track=$track: $benchmark_path" >&2
-      exit 1
-    fi
-    cmd+=(--benchmark-path "$benchmark_path")
-  fi
-  if [[ -n "$MODEL" ]]; then
-    cmd+=(--model "$MODEL")
-  fi
-  if [[ -n "$BASE_URL" ]]; then
-    cmd+=(--base-url "$BASE_URL")
-  fi
-  if [[ -n "$PREDICTION_STATUS_FIELD" ]]; then
-    cmd+=(--prediction-status-field "$PREDICTION_STATUS_FIELD")
-  fi
-  if [[ -n "$PREDICTION_TEXT_FIELD" ]]; then
-    cmd+=(--prediction-text-field "$PREDICTION_TEXT_FIELD")
-  fi
   if [[ "$RESUME" == "true" ]]; then
     cmd+=(--resume)
   fi
@@ -189,4 +104,4 @@ for track in "${TRACKS[@]}"; do
 done
 
 echo "[complete] scoring finished for tracks: ${TRACKS[*]}"
-echo "[complete] outputs rooted at: $OUTPUT_ROOT"
+echo "[complete] reports written under: $PREDICTIONS_ROOT"
