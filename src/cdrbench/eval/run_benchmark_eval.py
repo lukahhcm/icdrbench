@@ -14,7 +14,8 @@ from urllib.parse import urlparse
 import yaml
 
 from cdrbench.eval.metrics import compute_recipe_metrics
-from cdrbench.llm_utils import build_client, parse_json_response, resolve_api_key, resolve_base_url, resolve_model
+from cdrbench.infer.openai_infer import make_api_infer, make_vllm_infer
+from cdrbench.llm_utils import parse_json_response, resolve_api_key, resolve_base_url, resolve_model
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -246,6 +247,114 @@ def _chat_completion(
             if value is not None:
                 usage_payload[field] = value
     return content, usage_payload
+
+
+def _is_local_base_url(base_url: str) -> bool:
+    host = (urlparse(base_url).hostname or '').strip().lower()
+    return host in LOCAL_HOSTS
+
+
+def _build_infer_backend(args: argparse.Namespace, *, model: str, base_url: str, api_key: str) -> Any:
+    common_kwargs = {
+        'model': model,
+        'api_base': base_url,
+        'concurrency': max(1, int(args.concurrency)),
+        'max_tokens': args.max_tokens,
+        'temperature': args.temperature,
+        'num_runs': 1,
+        'max_retries': max(1, int(args.max_retries) + 1),
+        'retry_delay': float(args.retry_sleep_seconds),
+    }
+    if _is_local_base_url(base_url):
+        return make_vllm_infer(**common_kwargs)
+    return make_api_infer(
+        **common_kwargs,
+        api_key=api_key,
+    )
+
+
+def _predict_single_variant(
+    *,
+    client: Any,
+    model: str,
+    system_prompt: str,
+    schema_hint: str,
+    row: dict[str, Any],
+    prompt_variant_index: int,
+    temperature: float,
+    max_tokens: int,
+    max_retries: int,
+    retry_sleep_seconds: float,
+) -> dict[str, Any]:
+    instance_id = str(row.get('instance_id') or '')
+    input_length_chars = _row_input_length_chars(row)
+    prompt_variant = _select_prompt_variant(row, prompt_variant_index)
+    user_requirement = str(prompt_variant.get('user_requirement') or '').strip()
+    user_prompt = _render_user_prompt(row, user_requirement, schema_hint)
+
+    prediction_payload = None
+    prediction_error = None
+    response_text = ''
+    usage_payload: dict[str, Any] = {}
+    for attempt in range(1, max_retries + 2):
+        try:
+            response_text, usage_payload = _chat_completion(
+                client=client,
+                model=model,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            prediction_payload, prediction_error = _extract_prediction_payload(response_text)
+            if prediction_error is None:
+                break
+        except Exception as exc:  # pragma: no cover - exercised in CLI usage
+            prediction_error = f'request_error: {exc}'
+            print(
+                f'warn predict instance_id={instance_id or "UNKNOWN"} '
+                f'prompt_variant_index={prompt_variant_index} '
+                f'input_length_chars={input_length_chars} '
+                f'attempt={attempt}/{max_retries + 1} '
+                f'error={prediction_error}',
+                flush=True,
+            )
+        if attempt <= max_retries:
+            time.sleep(retry_sleep_seconds)
+
+    if prediction_error is not None:
+        print(
+            f'warn predict failed instance_id={instance_id or "UNKNOWN"} '
+            f'prompt_variant_index={prompt_variant_index} '
+            f'input_length_chars={input_length_chars} '
+            f'final_error={prediction_error}',
+            flush=True,
+        )
+
+    predicted_status = ''
+    predicted_clean_text = ''
+    if isinstance(prediction_payload, dict):
+        predicted_status, predicted_clean_text = _extract_prediction_fields(
+            {'parsed_response': prediction_payload},
+            explicit_status_field=None,
+            explicit_text_field=None,
+        )
+
+    return {
+        'prompt_variant_index': prompt_variant_index,
+        'prompt_style_id': str(prompt_variant.get('style_id') or ''),
+        'prompt_style_label': str(prompt_variant.get('style_label') or ''),
+        'user_requirement': user_requirement,
+        'request_model': model,
+        'request_base_url': '',
+        'raw_response': response_text,
+        'parsed_response': prediction_payload,
+        'prediction_error': prediction_error,
+        'prediction_valid_json': prediction_error is None,
+        'response_usage': usage_payload,
+        'predicted_status': predicted_status,
+        'predicted_clean_text': predicted_clean_text,
+    }
 
 
 def _extract_prediction_payload(response_text: str) -> tuple[dict[str, Any] | None, str | None]:
@@ -688,7 +797,8 @@ def _predict(args: argparse.Namespace) -> None:
     base_url = resolve_base_url(args.base_url)
     api_key = _resolved_api_key(args.api_key, base_url)
     model = resolve_model(args.model)
-    client = build_client(api_key=api_key, base_url=base_url)
+    concurrency = max(1, int(args.concurrency))
+    infer_backend = _build_infer_backend(args, model=model, base_url=base_url, api_key=api_key)
 
     existing_rows_by_id: dict[str, dict[str, Any]] = {}
     if args.resume and output_path.exists():
@@ -709,6 +819,7 @@ def _predict(args: argparse.Namespace) -> None:
         f'start predict track={_track_name_from_path(eval_path)} model={model} '
         f'num_rows={total_rows} skipped_input_too_long={skipped_for_input_length} '
         f'progress_every={args.progress_every} resume={bool(args.resume)} '
+        f'concurrency={concurrency} '
         f'max_input_chars={args.max_input_chars} '
         f'max_row_input_chars={max_input_length_chars} '
         f'avg_row_input_chars={avg_input_length_chars:.1f} '
@@ -722,9 +833,10 @@ def _predict(args: argparse.Namespace) -> None:
             'if the model does not support long context, request errors will be printed below.',
             flush=True,
         )
-    for index, row in enumerate(rows, start=1):
+    row_jobs: list[tuple[int, dict[str, Any], list[int], dict[int, dict[str, Any]]]] = []
+    variant_jobs: list[tuple[int, dict[str, Any], int, dict[str, Any]]] = []
+    for row in rows:
         instance_id = str(row.get('instance_id') or '')
-        input_length_chars = _row_input_length_chars(row)
         selected_prompt_variant_indices = _parse_prompt_variant_indices(
             args.prompt_variant_indices if args.prompt_variant_indices is not None else str(args.prompt_variant_index),
             row,
@@ -739,42 +851,47 @@ def _predict(args: argparse.Namespace) -> None:
             if prompt_variant_index not in existing_variant_predictions
         ]
 
+        row_index = len(row_jobs)
+        row_jobs.append((row_index, row, selected_prompt_variant_indices, variant_predictions))
         for prompt_variant_index in missing_indices:
             prompt_variant = _select_prompt_variant(row, prompt_variant_index)
             user_requirement = str(prompt_variant.get('user_requirement') or '').strip()
             user_prompt = _render_user_prompt(row, user_requirement, schema_hint)
+            variant_jobs.append(
+                (
+                    row_index,
+                    row,
+                    prompt_variant_index,
+                    {
+                        'prompt_style_id': str(prompt_variant.get('style_id') or ''),
+                        'prompt_style_label': str(prompt_variant.get('style_label') or ''),
+                        'user_requirement': user_requirement,
+                        'messages': [
+                            {'role': 'system', 'content': system_prompt},
+                            {'role': 'user', 'content': user_prompt},
+                        ],
+                    },
+                )
+            )
 
+    if variant_jobs:
+        print(
+            f'start infer backend={infer_backend!r} '
+            f'num_variant_requests={len(variant_jobs)}',
+            flush=True,
+        )
+        infer_results = infer_backend.infer([job[3]['messages'] for job in variant_jobs])
+        for idx, infer_result in enumerate(infer_results, start=1):
+            row_index, row, prompt_variant_index, job_meta = variant_jobs[idx - 1]
+            instance_id = str(row.get('instance_id') or '')
+            input_length_chars = _row_input_length_chars(row)
+            response_text = infer_result.text
             prediction_payload = None
             prediction_error = None
-            response_text = ''
             usage_payload: dict[str, Any] = {}
-            for attempt in range(1, args.max_retries + 2):
-                try:
-                    response_text, usage_payload = _chat_completion(
-                        client=client,
-                        model=model,
-                        system_prompt=system_prompt,
-                        user_prompt=user_prompt,
-                        temperature=args.temperature,
-                        max_tokens=args.max_tokens,
-                    )
-                    prediction_payload, prediction_error = _extract_prediction_payload(response_text)
-                    if prediction_error is None:
-                        break
-                except Exception as exc:  # pragma: no cover - exercised in CLI usage
-                    prediction_error = f'request_error: {exc}'
-                    print(
-                        f'warn predict instance_id={instance_id or "UNKNOWN"} '
-                        f'prompt_variant_index={prompt_variant_index} '
-                        f'input_length_chars={input_length_chars} '
-                        f'attempt={attempt}/{args.max_retries + 1} '
-                        f'error={prediction_error}',
-                        flush=True,
-                    )
-                if attempt <= args.max_retries:
-                    time.sleep(args.retry_sleep_seconds)
 
-            if prediction_error is not None:
+            if infer_result.error is not None:
+                prediction_error = f'request_error: {infer_result.error}'
                 print(
                     f'warn predict failed instance_id={instance_id or "UNKNOWN"} '
                     f'prompt_variant_index={prompt_variant_index} '
@@ -782,6 +899,16 @@ def _predict(args: argparse.Namespace) -> None:
                     f'final_error={prediction_error}',
                     flush=True,
                 )
+            else:
+                prediction_payload, prediction_error = _extract_prediction_payload(response_text)
+                if prediction_error is not None:
+                    print(
+                        f'warn predict failed instance_id={instance_id or "UNKNOWN"} '
+                        f'prompt_variant_index={prompt_variant_index} '
+                        f'input_length_chars={input_length_chars} '
+                        f'final_error={prediction_error}',
+                        flush=True,
+                    )
 
             predicted_status = ''
             predicted_clean_text = ''
@@ -792,11 +919,11 @@ def _predict(args: argparse.Namespace) -> None:
                     explicit_text_field=None,
                 )
 
-            variant_predictions[prompt_variant_index] = {
+            row_jobs[row_index][3][prompt_variant_index] = {
                 'prompt_variant_index': prompt_variant_index,
-                'prompt_style_id': str(prompt_variant.get('style_id') or ''),
-                'prompt_style_label': str(prompt_variant.get('style_label') or ''),
-                'user_requirement': user_requirement,
+                'prompt_style_id': job_meta['prompt_style_id'],
+                'prompt_style_label': job_meta['prompt_style_label'],
+                'user_requirement': job_meta['user_requirement'],
                 'request_model': model,
                 'request_base_url': base_url,
                 'raw_response': response_text,
@@ -808,7 +935,15 @@ def _predict(args: argparse.Namespace) -> None:
                 'predicted_clean_text': predicted_clean_text,
             }
             new_count += 1
+            if idx % args.progress_every == 0 or idx == len(variant_jobs):
+                elapsed = time.time() - started
+                print(
+                    f'progress predict variant={idx}/{len(variant_jobs)} '
+                    f'new_variant_predictions={new_count} elapsed_sec={elapsed:.1f}',
+                    flush=True,
+                )
 
+    for _, row, selected_prompt_variant_indices, variant_predictions in row_jobs:
         inference_row = {
             **_base_inference_row(row),
             'request_model': model,
@@ -817,14 +952,6 @@ def _predict(args: argparse.Namespace) -> None:
             'variant_predictions': [variant_predictions[key] for key in sorted(variant_predictions)],
         }
         output_rows.append(inference_row)
-
-        if index % args.progress_every == 0 or index == total_rows:
-            elapsed = time.time() - started
-            print(
-                f'progress predict row={index}/{total_rows} '
-                f'new_variant_predictions={new_count} elapsed_sec={elapsed:.1f}',
-                flush=True,
-            )
 
     _write_jsonl(output_path, output_rows)
     summary = {
@@ -1115,6 +1242,7 @@ def main() -> None:
     )
     predict_parser.add_argument('--max-retries', type=int, default=2)
     predict_parser.add_argument('--retry-sleep-seconds', type=float, default=2.0)
+    predict_parser.add_argument('--concurrency', type=int, default=1)
     predict_parser.add_argument('--progress-every', type=int, default=DEFAULT_PROGRESS_EVERY)
     predict_parser.add_argument('--resume', action='store_true')
     predict_parser.set_defaults(func=_predict)

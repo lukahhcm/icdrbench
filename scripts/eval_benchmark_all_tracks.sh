@@ -33,6 +33,7 @@ Options:
   --max-samples <int>                Optional cap for smoke tests. Default: 0 (all)
   --temperature <float>              Default: 0.0
   --max-tokens <int>                 Default: 0 (use model/server default)
+  --concurrency <int>                Request concurrency. Default: 1
   --resume                           Resume predictions from existing per-track files
   --predict-only                     Only run inference, skip scoring
   --score-only                       Only score existing prediction files
@@ -84,6 +85,7 @@ PROMPT_VARIANT_INDEX="0"
 MAX_SAMPLES="0"
 TEMPERATURE="0.0"
 MAX_TOKENS="0"
+CONCURRENCY="1"
 RESUME="false"
 PREDICT_ONLY="false"
 SCORE_ONLY="false"
@@ -148,6 +150,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --max-tokens)
       MAX_TOKENS="$2"
+      shift 2
+      ;;
+    --concurrency)
+      CONCURRENCY="$2"
       shift 2
       ;;
     --resume)
@@ -259,10 +265,11 @@ for track in "${TRACKS[@]}"; do
       --output-path "$track_infer_dir/predictions.jsonl"
       --model "$MODEL"
       --prompt-variant-index "$PROMPT_VARIANT_INDEX"
-      --max-samples "$MAX_SAMPLES"
-      --temperature "$TEMPERATURE"
-      --max-tokens "$MAX_TOKENS"
-    )
+        --max-samples "$MAX_SAMPLES"
+        --temperature "$TEMPERATURE"
+        --max-tokens "$MAX_TOKENS"
+        --concurrency "$CONCURRENCY"
+      )
     if [[ -n "$BASE_URL" ]]; then
       predict_cmd+=(--base-url "$BASE_URL")
     fi

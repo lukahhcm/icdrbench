@@ -366,12 +366,15 @@ Run inference for `atomic_ops` only:
 ```bash
 ./scripts/infer_benchmark_tracks.sh \
   --tracks atomic_ops \
-  --eval-root data/benchmark_prompts \
+  --eval-root data/benchmark \
   --model gpt-5.4 \
   --base-url http://123.57.212.178:3333/v1 \
   --output-root data/inference_runs/gpt54 \
+  --concurrency 1 \
   --resume
 ```
+
+Use `--concurrency 1` for remote or rate-limited external APIs unless you know the endpoint is stable under parallel requests. For local `vllm`, start with `--concurrency 8` or `--concurrency 16` and tune upward only after checking throughput and error rate.
 
 Then score the saved predictions:
 
@@ -412,7 +415,13 @@ For `atomic_ops` and `main`, the paper-facing metrics are `mean_rs`, `rs_at_k`, 
 To benchmark a local model through the same OpenAI-compatible client path, launch `vllm` first:
 
 ```bash
-bash scripts/serve_vllm_openai.sh /path/to/local/model local-model 2 0,1 8000
+bash scripts/start_vllm.sh /path/to/local/model local-model 8000 0,1 2
+```
+
+If you keep a fixed model roster, you can also use a preset launcher under `scripts/model_serve/`, for example:
+
+```bash
+bash scripts/model_serve/start_vllm_qwen3_5_9b.sh
 ```
 
 Then run the two-step atomic evaluation against the local server:
@@ -425,6 +434,7 @@ Then run the two-step atomic evaluation against the local server:
   --base-url http://127.0.0.1:8000/v1 \
   --api-key EMPTY \
   --output-root data/inference_runs/local_model \
+  --concurrency 16 \
   --resume
 
 ./scripts/score_benchmark_tracks.sh \
@@ -449,7 +459,7 @@ CUDA_VISIBLE_DEVICES=<gpu_ids> python -m vllm.entrypoints.openai.api_server \
 For example, to use GPUs `4,5,6,7`:
 
 ```bash
-bash scripts/serve_vllm_openai.sh /path/to/local/model local-model 4 4,5,6,7 8904
+bash scripts/start_vllm.sh /path/to/local/model local-model 8904 4,5,6,7 4
 
 ./scripts/infer_benchmark_tracks.sh \
   --tracks atomic_ops,main \
@@ -458,10 +468,11 @@ bash scripts/serve_vllm_openai.sh /path/to/local/model local-model 4 4,5,6,7 890
   --base-url http://127.0.0.1:8904/v1 \
   --api-key EMPTY \
   --output-root data/evaluation/infer/local_model \
+  --concurrency 16 \
   --resume
 ```
 
-By default, inference now leaves `max_tokens` unset so the model/server default generation limit is used. The inference logs also print the maximum input length in the current run and emit per-instance request errors, which helps debug models that do not support long-context benchmark rows.
+By default, inference leaves `max_tokens` unset so the model/server default generation limit is used. The inference logs also print the maximum input length in the current run, the configured request concurrency, and per-instance request errors, which helps debug models that do not support long-context benchmark rows.
 
 If you want one script with a fixed model suite configured at the top, use:
 
@@ -478,6 +489,7 @@ If you want one command that runs model inference and scoring across `atomic_ops
 ./scripts/eval_benchmark_all_tracks.sh \
   --model gpt-5.4 \
   --base-url http://123.57.212.178:3333/v1 \
+  --concurrency 1 \
   --output-root data/eval_runs/gpt54_all
 ```
 
@@ -488,6 +500,7 @@ For a local `vllm` server:
   --model local-model \
   --base-url http://127.0.0.1:8000/v1 \
   --api-key EMPTY \
+  --concurrency 16 \
   --output-root data/eval_runs/local_model_all
 ```
 

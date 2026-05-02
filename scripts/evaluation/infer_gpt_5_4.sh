@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+cd "${REPO_ROOT}"
+
+TRACKS="${TRACKS:-atomic_ops,main}"
+EVAL_ROOT="${EVAL_ROOT:-data/benchmark}"
+MODEL="${MODEL:-gpt-5.4}"
+BASE_URL="${BASE_URL:-http://123.57.212.178:3333/v1}"
+API_KEY="${API_KEY:-}"
+OUTPUT_ROOT="${OUTPUT_ROOT:-data/evaluation/infer/gpt_5_4}"
+PROMPT_VARIANT_INDICES="${PROMPT_VARIANT_INDICES:-all}"
+MAX_SAMPLES="${MAX_SAMPLES:-0}"
+MAX_INPUT_CHARS="${MAX_INPUT_CHARS:-0}"
+TEMPERATURE="${TEMPERATURE:-0.0}"
+MAX_TOKENS="${MAX_TOKENS:-0}"
+CONCURRENCY="${CONCURRENCY:-1}"
+PROGRESS_EVERY="${PROGRESS_EVERY:-20}"
+
+cmd=(
+  "${REPO_ROOT}/scripts/infer_benchmark_tracks.sh"
+  --tracks "${TRACKS}"
+  --eval-root "${EVAL_ROOT}"
+  --model "${MODEL}"
+  --base-url "${BASE_URL}"
+  --output-root "${OUTPUT_ROOT}"
+  --prompt-variant-indices "${PROMPT_VARIANT_INDICES}"
+  --max-samples "${MAX_SAMPLES}"
+  --max-input-chars "${MAX_INPUT_CHARS}"
+  --temperature "${TEMPERATURE}"
+  --max-tokens "${MAX_TOKENS}"
+  --concurrency "${CONCURRENCY}"
+  --progress-every "${PROGRESS_EVERY}"
+)
+
+if [[ -n "${API_KEY}" ]]; then
+  cmd+=(--api-key "${API_KEY}")
+fi
+if [[ "${RESUME:-true}" == "true" ]]; then
+  cmd+=(--resume)
+fi
+
+exec "${cmd[@]}"
