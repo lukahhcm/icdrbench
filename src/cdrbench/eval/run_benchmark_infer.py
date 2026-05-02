@@ -47,6 +47,19 @@ def _write_json(path: Path, payload: Any) -> None:
     tmp_path.replace(path)
 
 
+def _write_progress_snapshot(output_path: Path, output_dir: Path, output_rows: list[dict[str, Any]], model: str, base_url: str, track_name: str) -> None:
+    _write_jsonl(output_path, output_rows)
+    _write_json(
+        output_dir / 'summary.json',
+        {
+            'track': track_name,
+            'model': model,
+            'base_url': base_url,
+            'num_instances': len(output_rows),
+        },
+    )
+
+
 def _load_yaml(path: Path) -> dict[str, Any]:
     with path.open('r', encoding='utf-8') as handle:
         payload = yaml.safe_load(handle)
@@ -335,12 +348,13 @@ def main() -> None:
                 'request_model': model,
                 'request_base_url': base_url,
                 'selected_prompt_variant_indices': selected_prompt_variant_indices,
-                'variant_predictions': [],
+                'variant_predictions': [existing_variant_predictions[key] for key in sorted(existing_variant_predictions)],
             }
         )
 
+    track_name = eval_path.stem or 'unknown'
     print(
-        f'start infer track={eval_path.stem or "unknown"} model={model} '
+        f'start infer track={track_name} model={model} '
         f'num_rows={len(rows)} progress_every={args.progress_every} resume={bool(args.resume)} '
         f'concurrency={max(1, int(args.concurrency))} base_url={base_url}',
         flush=True,
@@ -377,24 +391,10 @@ def main() -> None:
             output_rows[row_index]['selected_prompt_variant_indices'] = selected_prompt_variant_indices
             if index % args.progress_every == 0 or index == len(variant_jobs):
                 elapsed = time.time() - started
+                _write_progress_snapshot(output_path, output_dir, output_rows, model, base_url, track_name)
                 print(f'progress infer variant={index}/{len(variant_jobs)} elapsed_sec={elapsed:.1f}', flush=True)
 
-    for output_row in output_rows:
-        if not output_row['variant_predictions']:
-            instance_id = str(output_row.get('instance_id') or '')
-            existing_variant_predictions = _existing_variant_prediction_map(existing_rows_by_id.get(instance_id, {}))
-            output_row['variant_predictions'] = [existing_variant_predictions[key] for key in sorted(existing_variant_predictions)]
-
-    _write_jsonl(output_path, output_rows)
-    _write_json(
-        output_dir / 'summary.json',
-        {
-            'track': eval_path.stem or 'unknown',
-            'model': model,
-            'base_url': base_url,
-            'num_instances': len(output_rows),
-        },
-    )
+    _write_progress_snapshot(output_path, output_dir, output_rows, model, base_url, track_name)
     print(f'wrote predictions -> {output_path}', flush=True)
     print(f'wrote summary -> {output_dir / "summary.json"}', flush=True)
 

@@ -7,17 +7,18 @@ Usage:
   infer_benchmark_tracks.sh [options]
 
 Run model inference only for one or more CDR-Bench tracks.
-By default this script targets the two primary tracks:
+By default this script targets all three benchmark tracks:
 
   1. atomic_ops
   2. main
+  3. order_sensitivity
 
 It stores raw model outputs so metrics can be recomputed later without rerunning inference.
 
 Options:
   --eval-root <path>                   Benchmark root. Default: data/benchmark
   --output-root <path>                 Output root. Default: data/evaluation/infer
-  --tracks <csv>                       Comma-separated tracks. Default: atomic_ops,main
+  --tracks <csv>                       Comma-separated tracks. Default: atomic_ops,main,order_sensitivity
   --model <name>                       API model name. Required
   --base-url <url>                     OpenAI-compatible API base URL
   --api-key <key>                      API key. For local vLLM you can use EMPTY
@@ -57,7 +58,7 @@ fi
 
 EVAL_ROOT="data/benchmark"
 OUTPUT_ROOT="data/evaluation/infer"
-TRACKS_CSV="atomic_ops,main"
+TRACKS_CSV="atomic_ops,main,order_sensitivity"
 MODEL=""
 BASE_URL=""
 API_KEY=""
