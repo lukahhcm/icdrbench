@@ -10,12 +10,14 @@ Build a smaller engineering subset from the full main benchmark.
 
 Default behavior:
   - read from data/benchmark_full/main
+  - use selection summaries from data/processed/benchmark_instances
   - write to data/benchmark/main
   - keep at most 1 clean-only, 1 filter-then-clean, and 1 clean-then-filter variant per recipe
   - keep up to 10 rows per retained variant
 
 Options:
   --source-dir <path>                Full main benchmark directory. Default: data/benchmark_full/main
+  --processed-summary-dir <path>     Benchmark-instance summary directory. Default: data/processed/benchmark_instances
   --output-dir <path>                Output subset directory. Default: data/benchmark/main
   --rows-per-variant <int>           Max rows kept per retained variant. Default: 10
   -h, --help                         Show this help
@@ -32,6 +34,7 @@ if [[ ! -x "$PYTHON_BIN" ]]; then
 fi
 
 SOURCE_DIR="data/benchmark_full/main"
+PROCESSED_SUMMARY_DIR="data/processed/benchmark_instances"
 OUTPUT_DIR="data/benchmark/main"
 ROWS_PER_VARIANT="10"
 
@@ -43,6 +46,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --output-dir)
       OUTPUT_DIR="$2"
+      shift 2
+      ;;
+    --processed-summary-dir)
+      PROCESSED_SUMMARY_DIR="$2"
       shift 2
       ;;
     --rows-per-variant)
@@ -65,5 +72,6 @@ export PYTHONPATH="$REPO_ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
 
 "$PYTHON_BIN" -m cdrbench.prepare_data.build_engineering_main_subset \
   --source-dir "$SOURCE_DIR" \
+  --processed-summary-dir "$PROCESSED_SUMMARY_DIR" \
   --output-dir "$OUTPUT_DIR" \
   --rows-per-variant "$ROWS_PER_VARIANT"

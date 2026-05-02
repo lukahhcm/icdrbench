@@ -93,6 +93,14 @@ def _resolve_source_file_candidates(source_dir: Path, filenames: list[str]) -> P
     raise SystemExit(f'missing required source file: expected one of {expected} or {fallback_expected}')
 
 
+def _resolve_optional_file_candidates(base_dir: Path, filenames: list[str]) -> Path | None:
+    for filename in filenames:
+        candidate = base_dir / filename
+        if candidate.exists():
+            return candidate
+    return None
+
+
 def _family_rank_key(row: dict[str, Any]) -> tuple[int, int, int, int, str]:
     return (
         _to_int(row.get('selected_group_count')),
@@ -153,36 +161,98 @@ def _select_best_families(summary_rows: list[dict[str, str]]) -> tuple[dict[str,
     return selected_families, manifest_rows
 
 
+def _select_best_families_from_rows(full_rows: list[dict[str, Any]]) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
+    group_rows_by_family: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
+    family_meta_by_id: dict[str, dict[str, Any]] = {}
+    for row in full_rows:
+        recipe_id = str(row.get('recipe_id') or '').strip()
+        family_id = str(row.get('order_family_id') or '').strip()
+        group_id = str(row.get('order_group_instance_id') or '').strip()
+        if not recipe_id or not family_id or not group_id:
+            continue
+        group_rows_by_family[family_id][group_id].append(row)
+        family_meta_by_id.setdefault(
+            family_id,
+            {
+                'recipe_id': recipe_id,
+                'order_family_id': family_id,
+                'filter_name': row.get('filter_name'),
+            },
+        )
+
+    by_recipe: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for family_id, groups in group_rows_by_family.items():
+        normalized_groups = [rows for rows in (_normalize_group_rows(group_rows) for group_rows in groups.values()) if rows is not None]
+        if not normalized_groups:
+            continue
+        family_rows = [row for rows in normalized_groups for row in rows]
+        meta = family_meta_by_id[family_id]
+        by_recipe[meta['recipe_id']].append(
+            {
+                **meta,
+                'full_selected_group_count': len(normalized_groups),
+                'full_selected_variant_count': len(family_rows),
+                'keep_count': sum(1 for row in family_rows if str(row.get('reference_status') or '').upper() == 'KEEP'),
+                'drop_count': sum(1 for row in family_rows if str(row.get('reference_status') or '').upper() == 'DROP'),
+            }
+        )
+
+    selected_families: dict[str, dict[str, Any]] = {}
+    manifest_rows: list[dict[str, Any]] = []
+    for recipe_id in sorted(by_recipe):
+        best = max(
+            by_recipe[recipe_id],
+            key=lambda row: (
+                _to_int(row.get('full_selected_group_count')),
+                _to_int(row.get('full_selected_variant_count')),
+                str(row.get('order_family_id') or ''),
+            ),
+        )
+        family_id = str(best['order_family_id'])
+        selected_families[family_id] = best
+        manifest_rows.append(best)
+    return selected_families, manifest_rows
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description='Build a smaller engineering subset from the full order-sensitivity benchmark.'
     )
     parser.add_argument('--source-dir', default='data/benchmark_full/order_sensitivity')
     parser.add_argument('--output-dir', default='data/benchmark/order_sensitivity')
+    parser.add_argument('--processed-summary-dir', default='data/processed/benchmark_instances')
     parser.add_argument('--groups-per-family', type=int, default=5)
     args = parser.parse_args()
 
     source_dir = Path(args.source_dir).resolve()
     output_dir = Path(args.output_dir).resolve()
+    processed_summary_dir = Path(args.processed_summary_dir).resolve()
     if args.groups_per_family <= 0:
         raise SystemExit('--groups-per-family must be > 0')
 
     benchmark_path = _resolve_source_file(source_dir, 'order_sensitivity.jsonl')
-    summary_path = _resolve_source_file_candidates(
-        source_dir,
-        [
-            'order_sensitivity_summary.csv',
-            'prompt_eval_build_summary.csv',
-            'prompt_eval_build_summary.jsonl',
-        ],
+    summary_path = _resolve_optional_file_candidates(
+        processed_summary_dir,
+        ['order_sensitivity_summary.csv'],
     )
+    if summary_path is None:
+        summary_path = _resolve_source_file_candidates(
+            source_dir,
+            [
+                'order_sensitivity_summary.csv',
+                'prompt_eval_build_summary.csv',
+                'prompt_eval_build_summary.jsonl',
+            ],
+        )
 
+    full_rows = _read_jsonl(benchmark_path)
     summary_rows = _read_table(summary_path)
     selected_families_by_id, manifest_rows = _select_best_families(summary_rows)
     if not selected_families_by_id:
-        raise SystemExit(f'no kept order families found in {summary_path}')
+        selected_families_by_id, manifest_rows = _select_best_families_from_rows(full_rows)
+    if not selected_families_by_id:
+        raise SystemExit(f'no usable order families found in {benchmark_path} or {summary_path}')
 
-    full_rows = _read_jsonl(benchmark_path)
     group_rows_by_family: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
     for row in full_rows:
         family_id = str(row.get('order_family_id') or '')

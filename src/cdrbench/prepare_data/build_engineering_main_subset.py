@@ -141,6 +141,14 @@ def _resolve_source_file_candidates(source_dir: Path, filenames: list[str]) -> P
     raise SystemExit(f'missing required source file: expected one of {expected} or {fallback_expected}')
 
 
+def _resolve_optional_file_candidates(base_dir: Path, filenames: list[str]) -> Path | None:
+    for filename in filenames:
+        candidate = base_dir / filename
+        if candidate.exists():
+            return candidate
+    return None
+
+
 def _select_best_variants(summary_rows: list[dict[str, str]]) -> tuple[dict[str, dict[str, str]], list[dict[str, Any]]]:
     kept_rows = [row for row in summary_rows if str(row.get('status') or '').strip() == 'kept']
     by_recipe_and_type: dict[tuple[str, str], list[dict[str, str]]] = defaultdict(list)
@@ -178,36 +186,98 @@ def _select_best_variants(summary_rows: list[dict[str, str]]) -> tuple[dict[str,
     return selected_variants, manifest_rows
 
 
+def _select_best_variants_from_rows(full_main_rows: list[dict[str, Any]]) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
+    rows_by_variant_id: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    variant_meta_by_id: dict[str, dict[str, Any]] = {}
+    for row in full_main_rows:
+        recipe_id = str(row.get('recipe_id') or '').strip()
+        recipe_type = str(row.get('recipe_type') or '').strip()
+        variant_id = str(row.get('recipe_variant_id') or '').strip()
+        if not recipe_id or not variant_id or recipe_type not in RECIPE_TYPES:
+            continue
+        rows_by_variant_id[variant_id].append(row)
+        variant_meta_by_id.setdefault(
+            variant_id,
+            {
+                'recipe_id': recipe_id,
+                'recipe_type': recipe_type,
+                'recipe_variant_id': variant_id,
+            },
+        )
+
+    by_recipe_and_type: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for variant_id, rows in rows_by_variant_id.items():
+        meta = variant_meta_by_id[variant_id]
+        by_recipe_and_type[(meta['recipe_id'], meta['recipe_type'])].append(
+            {
+                **meta,
+                'full_selected_count': len(rows),
+                'keep_count': sum(1 for row in rows if str(row.get('reference_status') or '').upper() == 'KEEP'),
+                'drop_count': sum(1 for row in rows if str(row.get('reference_status') or '').upper() == 'DROP'),
+            }
+        )
+
+    selected_variants: dict[str, dict[str, Any]] = {}
+    manifest_rows: list[dict[str, Any]] = []
+    recipe_ids = sorted({recipe_id for recipe_id, _ in by_recipe_and_type})
+    for recipe_id in recipe_ids:
+        for recipe_type in RECIPE_TYPES:
+            candidates = by_recipe_and_type.get((recipe_id, recipe_type), [])
+            if not candidates:
+                continue
+            best = max(
+                candidates,
+                key=lambda row: (
+                    _to_int(row.get('full_selected_count')),
+                    _to_int(row.get('keep_count')) + _to_int(row.get('drop_count')),
+                    str(row.get('recipe_variant_id') or ''),
+                ),
+            )
+            variant_id = str(best['recipe_variant_id'])
+            selected_variants[variant_id] = best
+            manifest_rows.append(best)
+    return selected_variants, manifest_rows
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description='Build a smaller engineering subset from the full main benchmark.'
     )
     parser.add_argument('--source-dir', default='data/benchmark_full/main')
     parser.add_argument('--output-dir', default='data/benchmark/main')
+    parser.add_argument('--processed-summary-dir', default='data/processed/benchmark_instances')
     parser.add_argument('--rows-per-variant', type=int, default=10)
     args = parser.parse_args()
 
     source_dir = Path(args.source_dir).resolve()
     output_dir = Path(args.output_dir).resolve()
+    processed_summary_dir = Path(args.processed_summary_dir).resolve()
     if args.rows_per_variant <= 0:
         raise SystemExit('--rows-per-variant must be > 0')
 
     main_path = _resolve_source_file(source_dir, 'main.jsonl')
-    main_summary_path = _resolve_source_file_candidates(
-        source_dir,
-        [
-            'main_summary.csv',
-            'prompt_eval_build_summary.csv',
-            'prompt_eval_build_summary.jsonl',
-        ],
+    main_summary_path = _resolve_optional_file_candidates(
+        processed_summary_dir,
+        ['main_summary.csv'],
     )
+    if main_summary_path is None:
+        main_summary_path = _resolve_source_file_candidates(
+            source_dir,
+            [
+                'main_summary.csv',
+                'prompt_eval_build_summary.csv',
+                'prompt_eval_build_summary.jsonl',
+            ],
+        )
 
+    full_main_rows = _read_jsonl(main_path)
     summary_rows = _read_table(main_summary_path)
     selected_variants_by_id, manifest_rows = _select_best_variants(summary_rows)
     if not selected_variants_by_id:
-        raise SystemExit(f'no kept main variants found in {main_summary_path}')
+        selected_variants_by_id, manifest_rows = _select_best_variants_from_rows(full_main_rows)
+    if not selected_variants_by_id:
+        raise SystemExit(f'no usable main variants found in {main_path} or {main_summary_path}')
 
-    full_main_rows = _read_jsonl(main_path)
     rows_by_variant_id: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in full_main_rows:
         variant_id = str(row.get('recipe_variant_id') or '')
