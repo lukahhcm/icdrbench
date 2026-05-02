@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 
 
@@ -121,6 +122,92 @@ def _draw_donut(ax, series: pd.Series, title: str, colors: list[str] | None = No
     ax.axis("equal")
 
 
+def _draw_bar(ax, series: pd.Series, title: str, color: str, *, horizontal: bool = False) -> None:
+    ax.set_title(title, fontsize=11, pad=10)
+    if series.empty or int(series.sum()) == 0:
+        ax.text(0.5, 0.5, "No data", ha="center", va="center", fontsize=12)
+        ax.axis("off")
+        return
+
+    labels = [str(idx) for idx in series.index]
+    values = [int(v) for v in series.values]
+    if horizontal:
+        y = np.arange(len(labels))
+        bars = ax.barh(y, values, color=color, alpha=0.9)
+        ax.set_yticks(y, labels, fontsize=9)
+        ax.invert_yaxis()
+        ax.set_xlabel("Count", fontsize=9)
+        for bar, value in zip(bars, values):
+            ax.text(value + max(values) * 0.01, bar.get_y() + bar.get_height() / 2, str(value), va="center", fontsize=8)
+    else:
+        x = np.arange(len(labels))
+        bars = ax.bar(x, values, color=color, alpha=0.9)
+        ax.set_xticks(x, labels, rotation=20, ha="right", fontsize=9)
+        ax.set_ylabel("Count", fontsize=9)
+        for bar, value in zip(bars, values):
+            ax.text(bar.get_x() + bar.get_width() / 2, value, str(value), ha="center", va="bottom", fontsize=8)
+    ax.grid(axis="y" if not horizontal else "x", alpha=0.2)
+    for spine in ("top", "right"):
+        ax.spines[spine].set_visible(False)
+
+
+def _draw_stacked_domain_bars(ax, counts_by_track: dict[str, pd.Series], title: str, palette: list[str]) -> None:
+    ax.set_title(title, fontsize=11, pad=10)
+    tracks = list(counts_by_track.keys())
+    domains = sorted({str(idx) for series in counts_by_track.values() for idx in series.index})
+    if not domains or not tracks:
+        ax.text(0.5, 0.5, "No data", ha="center", va="center", fontsize=12)
+        ax.axis("off")
+        return
+
+    color_map = {domain: palette[idx % len(palette)] for idx, domain in enumerate(domains)}
+    bottoms = np.zeros(len(tracks))
+    x = np.arange(len(tracks))
+    for domain in domains:
+        values = np.array([int(counts_by_track[track].get(domain, 0)) for track in tracks])
+        ax.bar(x, values, bottom=bottoms, label=domain, color=color_map[domain], alpha=0.95)
+        bottoms += values
+
+    ax.set_xticks(x, tracks, fontsize=9)
+    ax.set_ylabel("Count", fontsize=9)
+    ax.grid(axis="y", alpha=0.2)
+    ax.legend(fontsize=8, frameon=False, loc="upper right")
+    for xi, total in zip(x, bottoms):
+        ax.text(xi, total, str(int(total)), ha="center", va="bottom", fontsize=8)
+    for spine in ("top", "right"):
+        ax.spines[spine].set_visible(False)
+
+
+def _track_row_count(df: pd.DataFrame, unique_key: str | None = None) -> int:
+    if df.empty:
+        return 0
+    if unique_key and unique_key in df.columns:
+        return int(df[unique_key].nunique())
+    return int(len(df))
+
+
+def _order_structure_series(order_df: pd.DataFrame) -> pd.Series:
+    row_count = len(order_df) if not order_df.empty else 0
+    group_count = order_df["order_group_instance_id"].nunique() if "order_group_instance_id" in order_df.columns else 0
+    family_count = order_df["order_family_id"].nunique() if "order_family_id" in order_df.columns else 0
+    return pd.Series(
+        {
+            "families": int(family_count),
+            "groups": int(group_count),
+            "rows": int(row_count),
+        }
+    )
+
+
+def _top_atomic_operators(atomic_df: pd.DataFrame, k: int = 12) -> pd.Series:
+    series = _value_counts(atomic_df, "operator")
+    if len(series) <= k:
+        return series
+    top = series.iloc[:k].copy()
+    top.loc["others"] = int(series.iloc[k:].sum())
+    return top
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Plot benchmark composition charts for paper-ready inspection.")
     parser.add_argument("--benchmark-dir", default="data/benchmark")
@@ -154,6 +241,20 @@ def main() -> None:
     order_status = _sort_status(_value_counts(order_summary, "status"))
     atomic_domains = _value_counts(atomic_df, "source_domain")
     atomic_status = _sort_status(_value_counts(atomic_summary, "status"))
+    track_size_series = pd.Series(
+        {
+            "atomic_ops": _track_row_count(atomic_df),
+            "main": _track_row_count(main_df),
+            "order_sensitivity": _track_row_count(order_df),
+        }
+    )
+    domain_by_track = {
+        "atomic_ops": atomic_domains,
+        "main": main_domains,
+        "order_sensitivity": order_domains,
+    }
+    order_structure = _order_structure_series(order_df)
+    atomic_top_ops = _top_atomic_operators(atomic_df, k=10)
 
     palette = [
         "#0B7285",
@@ -167,17 +268,20 @@ def main() -> None:
     ]
     status_palette = ["#2B8A3E", "#F08C00", "#C92A2A", "#868E96", "#1C7ED6", "#9C36B5"]
 
-    fig, axes = plt.subplots(2, 4, figsize=(20, 10), constrained_layout=True)
-    fig.suptitle("CDR-Bench Composition Overview", fontsize=18, fontweight="bold")
+    fig, axes = plt.subplots(3, 3, figsize=(18, 14), constrained_layout=True)
+    fig.suptitle("CDR-Bench Benchmark Composition", fontsize=18, fontweight="bold")
 
-    _draw_donut(axes[0, 0], recipe_domains, "Recipe Library Domains", palette)
-    _draw_donut(axes[0, 1], main_domains, "Main Track by Domain", palette)
-    _draw_donut(axes[0, 2], main_types, "Main Track by Recipe Type", palette)
-    _draw_donut(axes[0, 3], main_status, "Main Variant Status", status_palette)
-    _draw_donut(axes[1, 0], order_domains, "Order Groups by Domain", palette)
-    _draw_donut(axes[1, 1], order_status, "Order Family Status", status_palette)
-    _draw_donut(axes[1, 2], atomic_domains, "Atomic Track by Source Domain", palette)
-    _draw_donut(axes[1, 3], atomic_status, "Atomic Operator Status", status_palette)
+    _draw_bar(axes[0, 0], track_size_series, "Track Sizes", "#0B7285")
+    _draw_stacked_domain_bars(axes[0, 1], domain_by_track, "Domain Composition by Track", palette)
+    _draw_donut(axes[0, 2], recipe_domains, "Recipe Library Domains", palette)
+
+    _draw_donut(axes[1, 0], main_types, "Main Track by Recipe Type", palette)
+    _draw_donut(axes[1, 1], main_status, "Main Variant Status", status_palette)
+    _draw_bar(axes[1, 2], order_structure, "Order Track Structure", "#E8590C")
+
+    _draw_donut(axes[2, 0], order_status, "Order Family Status", status_palette)
+    _draw_bar(axes[2, 1], atomic_top_ops, "Atomic Top Operators", "#5F3DC4", horizontal=True)
+    _draw_donut(axes[2, 2], atomic_status, "Atomic Operator Status", status_palette)
 
     png_path = output_dir / "benchmark_composition_overview.png"
     pdf_path = output_dir / "benchmark_composition_overview.pdf"
@@ -187,12 +291,15 @@ def main() -> None:
 
     summary_payload = {
         "recipe_library_domains": _counts_to_records(recipe_domains, "domain"),
+        "track_sizes": _counts_to_records(track_size_series, "track"),
         "main_domains": _counts_to_records(main_domains, "domain"),
         "main_recipe_types": _counts_to_records(main_types, summary_type_label),
         "main_variant_status": _counts_to_records(main_status, "status"),
+        "order_track_structure": _counts_to_records(order_structure, "component"),
         "order_group_domains": _counts_to_records(order_domains, "domain"),
         "order_family_status": _counts_to_records(order_status, "status"),
         "atomic_source_domains": _counts_to_records(atomic_domains, "source_domain"),
+        "atomic_top_operators": _counts_to_records(atomic_top_ops, "operator"),
         "atomic_operator_status": _counts_to_records(atomic_status, "status"),
     }
     (output_dir / "benchmark_composition_summary.json").write_text(
@@ -201,12 +308,15 @@ def main() -> None:
     )
 
     pd.DataFrame(_counts_to_records(recipe_domains, "domain")).to_csv(output_dir / "recipe_library_domains.csv", index=False)
+    pd.DataFrame(_counts_to_records(track_size_series, "track")).to_csv(output_dir / "track_sizes.csv", index=False)
     pd.DataFrame(_counts_to_records(main_domains, "domain")).to_csv(output_dir / "main_domains.csv", index=False)
     pd.DataFrame(_counts_to_records(main_types, summary_type_label)).to_csv(output_dir / "main_recipe_types.csv", index=False)
     pd.DataFrame(_counts_to_records(main_status, "status")).to_csv(output_dir / "main_variant_status.csv", index=False)
+    pd.DataFrame(_counts_to_records(order_structure, "component")).to_csv(output_dir / "order_track_structure.csv", index=False)
     pd.DataFrame(_counts_to_records(order_domains, "domain")).to_csv(output_dir / "order_group_domains.csv", index=False)
     pd.DataFrame(_counts_to_records(order_status, "status")).to_csv(output_dir / "order_family_status.csv", index=False)
     pd.DataFrame(_counts_to_records(atomic_domains, "source_domain")).to_csv(output_dir / "atomic_source_domains.csv", index=False)
+    pd.DataFrame(_counts_to_records(atomic_top_ops, "operator")).to_csv(output_dir / "atomic_top_operators.csv", index=False)
     pd.DataFrame(_counts_to_records(atomic_status, "status")).to_csv(output_dir / "atomic_operator_status.csv", index=False)
 
     print(f"wrote benchmark composition plots -> {output_dir}", flush=True)
