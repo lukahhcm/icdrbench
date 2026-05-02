@@ -7,16 +7,17 @@ Usage:
   score_benchmark_tracks.sh [options]
 
 Score previously saved inference outputs for one or more CDR-Bench tracks.
-By default this script targets the two primary tracks:
+By default this script targets all three benchmark tracks:
 
   1. atomic_ops
   2. main
+  3. order_sensitivity
 
 This step only reads predictions, computes metrics, and writes reports next to `predictions.jsonl`.
 
 Options:
   --predictions-root <path>           Inference root. Default: data/evaluation/infer
-  --tracks <csv>                      Comma-separated tracks. Default: atomic_ops,main
+  --tracks <csv>                      Comma-separated tracks. Default: atomic_ops,main,order_sensitivity
   --progress-every <int>              Default: 20
   --resume                            Resume scoring from existing report files in the same directory
   -h, --help                          Show this help
@@ -26,7 +27,7 @@ Examples:
     --predictions-root data/evaluation/infer/gpt54
 
   ./scripts/score_benchmark_tracks.sh \
-    --tracks atomic_ops,main \
+    --tracks atomic_ops,main,order_sensitivity \
     --predictions-root data/evaluation/infer/local_model
 EOF
 }
@@ -41,7 +42,7 @@ if [[ ! -x "$PYTHON_BIN" ]]; then
 fi
 
 PREDICTIONS_ROOT="data/evaluation/infer"
-TRACKS_CSV="atomic_ops,main"
+TRACKS_CSV="atomic_ops,main,order_sensitivity"
 PROGRESS_EVERY="20"
 RESUME="false"
 

@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
 
-TRACKS="${TRACKS:-atomic_ops,main}"
+TRACKS="${TRACKS:-atomic_ops,main,order_sensitivity}"
 MODEL="${MODEL:-qwen3_5_9b}"
 PREDICTIONS_ROOT="${PREDICTIONS_ROOT:-data/evaluation/infer/${MODEL}}"
 PROGRESS_EVERY="${PROGRESS_EVERY:-20}"

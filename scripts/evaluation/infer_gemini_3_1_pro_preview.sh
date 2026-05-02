@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
 
-TRACKS="${TRACKS:-atomic_ops,main}"
+TRACKS="${TRACKS:-atomic_ops,main,order_sensitivity}"
 EVAL_ROOT="${EVAL_ROOT:-data/benchmark}"
 MODEL="${MODEL:-gemini-3.1-pro-preview}"
 BASE_URL="${BASE_URL:-http://123.57.212.178:3333/v1}"
