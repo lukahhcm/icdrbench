@@ -35,6 +35,12 @@ def _read_csv(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(handle))
 
 
+def _read_table(path: Path) -> list[dict[str, Any]]:
+    if path.suffix.lower() == '.jsonl':
+        return _read_jsonl(path)
+    return _read_csv(path)
+
+
 def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if not rows:
@@ -122,6 +128,19 @@ def _resolve_source_file(source_dir: Path, filename: str) -> Path:
     raise SystemExit(f'missing required source file: expected {direct} or {fallback}')
 
 
+def _resolve_source_file_candidates(source_dir: Path, filenames: list[str]) -> Path:
+    for filename in filenames:
+        direct = source_dir / filename
+        if direct.exists():
+            return direct
+        fallback = source_dir.parent / filename
+        if fallback.exists():
+            return fallback
+    expected = ' or '.join(str(source_dir / filename) for filename in filenames)
+    fallback_expected = ' or '.join(str(source_dir.parent / filename) for filename in filenames)
+    raise SystemExit(f'missing required source file: expected one of {expected} or {fallback_expected}')
+
+
 def _select_best_variants(summary_rows: list[dict[str, str]]) -> tuple[dict[str, dict[str, str]], list[dict[str, Any]]]:
     kept_rows = [row for row in summary_rows if str(row.get('status') or '').strip() == 'kept']
     by_recipe_and_type: dict[tuple[str, str], list[dict[str, str]]] = defaultdict(list)
@@ -174,9 +193,16 @@ def main() -> None:
         raise SystemExit('--rows-per-variant must be > 0')
 
     main_path = _resolve_source_file(source_dir, 'main.jsonl')
-    main_summary_path = _resolve_source_file(source_dir, 'main_summary.csv')
+    main_summary_path = _resolve_source_file_candidates(
+        source_dir,
+        [
+            'main_summary.csv',
+            'prompt_eval_build_summary.csv',
+            'prompt_eval_build_summary.jsonl',
+        ],
+    )
 
-    summary_rows = _read_csv(main_summary_path)
+    summary_rows = _read_table(main_summary_path)
     selected_variants_by_id, manifest_rows = _select_best_variants(summary_rows)
     if not selected_variants_by_id:
         raise SystemExit(f'no kept main variants found in {main_summary_path}')

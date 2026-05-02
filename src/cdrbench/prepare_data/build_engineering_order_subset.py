@@ -35,6 +35,12 @@ def _read_csv(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(handle))
 
 
+def _read_table(path: Path) -> list[dict[str, Any]]:
+    if path.suffix.lower() == '.jsonl':
+        return _read_jsonl(path)
+    return _read_csv(path)
+
+
 def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if not rows:
@@ -72,6 +78,19 @@ def _resolve_source_file(source_dir: Path, filename: str) -> Path:
     if fallback.exists():
         return fallback
     raise SystemExit(f'missing required source file: expected {direct} or {fallback}')
+
+
+def _resolve_source_file_candidates(source_dir: Path, filenames: list[str]) -> Path:
+    for filename in filenames:
+        direct = source_dir / filename
+        if direct.exists():
+            return direct
+        fallback = source_dir.parent / filename
+        if fallback.exists():
+            return fallback
+    expected = ' or '.join(str(source_dir / filename) for filename in filenames)
+    fallback_expected = ' or '.join(str(source_dir.parent / filename) for filename in filenames)
+    raise SystemExit(f'missing required source file: expected one of {expected} or {fallback_expected}')
 
 
 def _family_rank_key(row: dict[str, Any]) -> tuple[int, int, int, int, str]:
@@ -149,9 +168,16 @@ def main() -> None:
         raise SystemExit('--groups-per-family must be > 0')
 
     benchmark_path = _resolve_source_file(source_dir, 'order_sensitivity.jsonl')
-    summary_path = _resolve_source_file(source_dir, 'order_sensitivity_summary.csv')
+    summary_path = _resolve_source_file_candidates(
+        source_dir,
+        [
+            'order_sensitivity_summary.csv',
+            'prompt_eval_build_summary.csv',
+            'prompt_eval_build_summary.jsonl',
+        ],
+    )
 
-    summary_rows = _read_csv(summary_path)
+    summary_rows = _read_table(summary_path)
     selected_families_by_id, manifest_rows = _select_best_families(summary_rows)
     if not selected_families_by_id:
         raise SystemExit(f'no kept order families found in {summary_path}')
