@@ -260,6 +260,7 @@ def _build_infer_backend(args: argparse.Namespace, model: str, base_url: str, ap
         'concurrency': max(1, int(args.concurrency)),
         'max_tokens': args.max_tokens,
         'temperature': args.temperature,
+        'top_p': args.top_p,
         'num_runs': 1,
         'max_retries': max(1, int(args.max_retries) + 1),
         'retry_delay': float(args.retry_sleep_seconds),
@@ -306,6 +307,7 @@ def main() -> None:
     parser.add_argument('--base-url', default=None)
     parser.add_argument('--api-key', default=None)
     parser.add_argument('--temperature', type=float, default=0.0)
+    parser.add_argument('--top-p', type=float, default=0.0)
     parser.add_argument('--max-tokens', type=int, default=0)
     parser.add_argument('--prompt-variant-index', type=int, default=0)
     parser.add_argument('--prompt-variant-indices', default=None)

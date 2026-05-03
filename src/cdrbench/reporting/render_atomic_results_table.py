@@ -115,7 +115,7 @@ def main() -> None:
     )
     parser.add_argument(
         '--caption',
-        default='Atomic benchmark results across models. RS denotes mean recipe success, RS@3 denotes pass-at-3 recipe success across prompt variants, and Mean RG denotes mean refinement gain.',
+        default='Atomic benchmark results across models. RS denotes mean recipe success, RS@3 denotes pass-at-3 recipe success across prompt variants, and Mean RG denotes mean bounded refinement gain.',
     )
     parser.add_argument('--label', default='tab:atomic-results')
     parser.add_argument(

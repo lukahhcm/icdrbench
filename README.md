@@ -260,17 +260,19 @@ Evaluation metrics:
 - `status_match = predicted_status == reference_status`
 - `text_exact_match = predicted_clean_text == reference_text`
 - `recipe_success = status_match AND text_exact_match`
-- `refinement_gain` is edit-distance improvement from input toward the reference:
+- `refinement_gain` (`rg`) is a bounded edit-distance improvement score from input toward the reference:
 
 ```text
 d_input = edit_distance(input_text, reference_text)
 d_pred  = edit_distance(predicted_clean_text, reference_text)
 
-if d_input == 0:
-    refinement_gain = 1.0 if d_pred == 0 else 0.0
+if d_input + d_pred == 0:
+    refinement_gain = 1.0
 else:
-    refinement_gain = 1 - d_pred / d_input
+    refinement_gain = (d_input - d_pred) / (d_input + d_pred)
 ```
+
+This keeps `rg` in `[-1, 1]`: `1` means fully correct, `0` means no net improvement, and negative values mean the prediction moved farther from the reference.
 
 The main evaluator uses raw-string exact match for `recipe_success`.
 
@@ -402,7 +404,7 @@ The scorer now writes compact report files by default:
 - `instance_metrics.jsonl`
 - `scored_variant_predictions.jsonl`
 
-For `atomic_ops` and `main`, the paper-facing metrics are `mean_rs`, `rs_at_k`, and `mean_rg`.
+For `atomic_ops` and `main`, the paper-facing metrics are `mean_rs`, `rs_at_k`, and `mean_rg` (mean bounded refinement gain).
 
 ## 11. Local vLLM Serving
 

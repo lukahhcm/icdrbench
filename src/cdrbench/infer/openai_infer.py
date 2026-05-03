@@ -27,6 +27,7 @@ class OpenAIInfer(BaseInfer):
         concurrency: int = 8,
         max_tokens: int = 0,
         temperature: float = 0.0,
+        top_p: float = 0.0,
         num_runs: int = 1,
         max_retries: int = 3,
         retry_delay: float = 1.0,
@@ -38,6 +39,7 @@ class OpenAIInfer(BaseInfer):
             concurrency=concurrency,
             max_tokens=max_tokens,
             temperature=temperature,
+            top_p=top_p,
             num_runs=num_runs,
         )
         self.max_retries = max_retries
@@ -58,6 +60,8 @@ class OpenAIInfer(BaseInfer):
                     'temperature': self.temperature,
                     'stream': False,
                 }
+                if self.top_p > 0:
+                    request_kwargs['top_p'] = self.top_p
                 if self.max_tokens > 0:
                     request_kwargs['max_tokens'] = self.max_tokens
                 if self._extra_body:
@@ -87,6 +91,7 @@ def make_vllm_infer(
     concurrency: int = 128,
     max_tokens: int = 0,
     temperature: float = 0.0,
+    top_p: float = 0.0,
     num_runs: int = 1,
     enable_thinking: bool = False,
     max_retries: int = 2,
@@ -99,6 +104,7 @@ def make_vllm_infer(
         concurrency=concurrency,
         max_tokens=max_tokens,
         temperature=temperature,
+        top_p=top_p,
         num_runs=num_runs,
         max_retries=max_retries,
         retry_delay=retry_delay,
@@ -114,6 +120,7 @@ def make_api_infer(
     concurrency: int = 8,
     max_tokens: int = 0,
     temperature: float = 0.0,
+    top_p: float = 0.0,
     num_runs: int = 1,
     max_retries: int = 3,
     retry_delay: float = 1.0,
@@ -126,6 +133,7 @@ def make_api_infer(
         concurrency=concurrency,
         max_tokens=max_tokens,
         temperature=temperature,
+        top_p=top_p,
         num_runs=num_runs,
         max_retries=max_retries,
         retry_delay=retry_delay,

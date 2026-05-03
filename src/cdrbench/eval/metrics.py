@@ -35,10 +35,11 @@ def compute_recipe_metrics(
 
     d_input = edit_distance(raw_input, raw_reference)
     d_pred = edit_distance(raw_prediction, raw_reference)
-    if d_input == 0:
-        refinement_gain = 1.0 if d_pred == 0 else 0.0
+    distance_total = d_input + d_pred
+    if distance_total == 0:
+        refinement_gain = 1.0
     else:
-        refinement_gain = 1.0 - (d_pred / d_input)
+        refinement_gain = (d_input - d_pred) / distance_total
 
     return {
         'normalized_reference_status': normalized_reference_status,
