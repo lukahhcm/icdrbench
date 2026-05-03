@@ -276,6 +276,27 @@ def _is_fatal_request_error(error_text: str | None) -> bool:
     return any(pattern.search(error_text) for pattern in FATAL_REQUEST_ERROR_PATTERNS)
 
 
+def _log_prediction_issue(
+    *,
+    track_name: str,
+    instance_id: str,
+    prompt_variant_index: int,
+    prediction_error: str | None,
+    response_text: str,
+) -> None:
+    if not prediction_error:
+        return
+    response_preview = response_text.strip().replace('\n', ' ')
+    if len(response_preview) > 240:
+        response_preview = response_preview[:240] + '...'
+    print(
+        f'warn infer track={track_name} instance_id={instance_id or "UNKNOWN"} '
+        f'prompt_variant_index={prompt_variant_index} error={prediction_error} '
+        f'response_preview={response_preview!r}',
+        flush=True,
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description='Run CDR-Bench inference on eval-ready JSONL and save raw predictions.')
     parser.add_argument('--eval-path', required=True)
@@ -388,6 +409,7 @@ def main() -> None:
 
         for index, infer_result in enumerate(infer_results, start=1):
             row_index, row, prompt_variant_index, meta, variant_predictions, selected_prompt_variant_indices = variant_jobs[index - 1]
+            instance_id = str(row.get('instance_id') or '')
             response_text = infer_result.text
             prediction_payload = None
             prediction_error = None
@@ -395,6 +417,13 @@ def main() -> None:
                 prediction_error = f'request_error: {infer_result.error}'
             else:
                 prediction_payload, prediction_error = _extract_prediction_payload(response_text)
+            _log_prediction_issue(
+                track_name=track_name,
+                instance_id=instance_id,
+                prompt_variant_index=prompt_variant_index,
+                prediction_error=prediction_error,
+                response_text=response_text,
+            )
             predicted_status, predicted_clean_text = _extract_prediction_fields(prediction_payload)
             variant_predictions[prompt_variant_index] = {
                 'prompt_variant_index': prompt_variant_index,
