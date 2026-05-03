@@ -38,7 +38,7 @@ VLLM_PID=$!
 echo "${VLLM_PID}" > "/tmp/vllm_${PORT}.pid"
 echo "[start_vllm] vLLM started (PID=${VLLM_PID}), waiting for ready..."
 
-MAX_WAIT=120
+MAX_WAIT=1200
 WAITED=0
 until curl -sf "http://127.0.0.1:${PORT}/health" > /dev/null 2>&1; do
   sleep 5
