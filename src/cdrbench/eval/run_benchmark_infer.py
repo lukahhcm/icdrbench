@@ -218,6 +218,8 @@ def _render_user_prompt(row: dict[str, Any], user_requirement: str, schema_hint:
 
 
 def _extract_prediction_payload(response_text: str) -> tuple[dict[str, Any] | None, str | None]:
+    if not response_text.strip():
+        return None, 'empty_response'
     try:
         payload = parse_json_response(response_text)
     except Exception as exc:
@@ -225,6 +227,12 @@ def _extract_prediction_payload(response_text: str) -> tuple[dict[str, Any] | No
     if not isinstance(payload, dict):
         return None, 'json_parse_error: response is not a JSON object'
     return payload, None
+
+
+def _is_retryable_prediction_error(prediction_error: str | None) -> bool:
+    if not prediction_error:
+        return False
+    return prediction_error == 'empty_response' or prediction_error.startswith('json_parse_error:')
 
 
 def _extract_prediction_fields(prediction_payload: dict[str, Any] | None) -> tuple[str, str]:
@@ -419,6 +427,21 @@ def main() -> None:
                 prediction_error = f'request_error: {infer_result.error}'
             else:
                 prediction_payload, prediction_error = _extract_prediction_payload(response_text)
+            retry_attempted = False
+            if _is_retryable_prediction_error(prediction_error):
+                retry_attempted = True
+                print(
+                    f'retry infer track={track_name} instance_id={instance_id or "UNKNOWN"} '
+                    f'prompt_variant_index={prompt_variant_index} reason={prediction_error}',
+                    flush=True,
+                )
+                retry_result = infer_backend.infer_one(meta['messages'])
+                response_text = retry_result.text
+                if retry_result.error is not None:
+                    prediction_payload = None
+                    prediction_error = f'request_error: {retry_result.error}'
+                else:
+                    prediction_payload, prediction_error = _extract_prediction_payload(response_text)
             _log_prediction_issue(
                 track_name=track_name,
                 instance_id=instance_id,
@@ -438,6 +461,7 @@ def main() -> None:
                 'parsed_response': prediction_payload,
                 'prediction_error': prediction_error,
                 'prediction_valid_json': prediction_error is None,
+                'retry_attempted': retry_attempted,
                 'response_usage': {},
                 'predicted_status': predicted_status,
                 'predicted_clean_text': predicted_clean_text,

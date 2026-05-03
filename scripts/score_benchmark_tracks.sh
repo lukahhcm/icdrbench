@@ -20,6 +20,7 @@ Options:
   --tracks <csv>                      Comma-separated tracks. Default: atomic_ops,main,order_sensitivity
   --progress-every <int>              Default: 20
   --resume                            Resume scoring from existing report files in the same directory
+  --no-resume                         Disable resume even if a wrapper defaults it on
   -h, --help                          Show this help
 
 Examples:
@@ -62,6 +63,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --resume)
       RESUME="true"
+      shift 1
+      ;;
+    --no-resume)
+      RESUME="false"
       shift 1
       ;;
     -h|--help)

@@ -31,6 +31,7 @@ Options:
   --concurrency <int>                  Request concurrency. Default: 1
   --progress-every <int>               Default: 20
   --resume                             Resume missing prompt variants from existing outputs
+  --no-resume                          Disable resume even if a wrapper defaults it on
   -h, --help                           Show this help
 
 Examples:
@@ -133,6 +134,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --resume)
       RESUME="true"
+      shift 1
+      ;;
+    --no-resume)
+      RESUME="false"
       shift 1
       ;;
     -h|--help)

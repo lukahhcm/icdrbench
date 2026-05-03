@@ -9,7 +9,18 @@ import time
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from cdrbench.eval.metrics import compute_recipe_metrics
+
+
+ROOT = Path(__file__).resolve().parents[3]
+DOMAIN_METADATA = {
+    'web': {'label': 'Web Refinement', 'abbr': 'WR', 'order': 0},
+    'arxiv': {'label': 'LaTeX Refinement', 'abbr': 'LR', 'order': 1},
+    'knowledge_base': {'label': 'RAG Preparation', 'abbr': 'RP', 'order': 2},
+    'pii': {'label': 'Privacy Redaction', 'abbr': 'PR', 'order': 3},
+}
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -65,6 +76,29 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     tmp_path.replace(path)
 
 
+def _load_domain_metadata() -> dict[str, dict[str, Any]]:
+    metadata = {key: dict(value) for key, value in DOMAIN_METADATA.items()}
+    path = ROOT / 'configs' / 'domains.yaml'
+    if not path.exists():
+        return metadata
+    with path.open('r', encoding='utf-8') as handle:
+        payload = yaml.safe_load(handle) or {}
+    domains = payload.get('domains') if isinstance(payload, dict) else None
+    if not isinstance(domains, dict):
+        return metadata
+    for key, value in domains.items():
+        if not isinstance(key, str):
+            continue
+        description = value.get('description') if isinstance(value, dict) else None
+        if key not in metadata:
+            metadata[key] = {
+                'label': description.strip() if isinstance(description, str) and description.strip() else key.replace('_', ' ').title(),
+                'abbr': key.upper(),
+                'order': 100 + len(metadata),
+            }
+    return metadata
+
+
 def _safe_mean(values: list[float]) -> float:
     return sum(values) / len(values) if values else 0.0
 
@@ -75,6 +109,25 @@ def _safe_median(values: list[float]) -> float:
 
 def _rate(rows: list[dict[str, Any]], key: str) -> float:
     return _safe_mean([1.0 if bool(row.get(key)) else 0.0 for row in rows])
+
+
+def _mean_optional(values: list[Any]) -> float:
+    normalized: list[float] = []
+    for value in values:
+        if value is None:
+            continue
+        try:
+            normalized.append(float(value))
+        except (TypeError, ValueError):
+            continue
+    return _safe_mean(normalized)
+
+
+def _is_format_instability_error(error_text: Any) -> bool:
+    if error_text is None:
+        return False
+    text = str(error_text)
+    return text == 'empty_response' or text.startswith('json_parse_error:')
 
 
 def _normalize_variant_predictions(row: dict[str, Any]) -> list[dict[str, Any]]:
@@ -150,6 +203,8 @@ def _base_identity(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _score_variant(prediction_row: dict[str, Any], variant_prediction: dict[str, Any]) -> dict[str, Any]:
+    prediction_error = variant_prediction.get('prediction_error')
+    valid_prediction = prediction_error is None
     predicted_status = '' if variant_prediction.get('predicted_status') is None else str(variant_prediction.get('predicted_status'))
     predicted_clean_text = '' if variant_prediction.get('predicted_clean_text') is None else str(variant_prediction.get('predicted_clean_text'))
     if not predicted_status and 'parsed_response' in variant_prediction and isinstance(variant_prediction['parsed_response'], dict):
@@ -160,15 +215,30 @@ def _score_variant(prediction_row: dict[str, Any], variant_prediction: dict[str,
     scored = _base_identity(prediction_row)
     scored['predicted_status'] = predicted_status
     scored['predicted_clean_text'] = predicted_clean_text
-    scored.update(
-        compute_recipe_metrics(
-            input_text=prediction_row.get('input_text', ''),
-            reference_status=prediction_row.get('reference_status', ''),
-            reference_text=prediction_row.get('reference_text', ''),
-            predicted_status=predicted_status,
-            predicted_clean_text=predicted_clean_text,
+    if valid_prediction:
+        scored.update(
+            compute_recipe_metrics(
+                input_text=prediction_row.get('input_text', ''),
+                reference_status=prediction_row.get('reference_status', ''),
+                reference_text=prediction_row.get('reference_text', ''),
+                predicted_status=predicted_status,
+                predicted_clean_text=predicted_clean_text,
+            )
         )
-    )
+    else:
+        scored.update(
+            {
+                'normalized_reference_status': '' if prediction_row.get('reference_status') is None else str(prediction_row.get('reference_status')).strip().upper(),
+                'normalized_predicted_status': '' if predicted_status is None else str(predicted_status).strip().upper(),
+                'status_match': False,
+                'text_exact_match': False,
+                'recipe_success': False,
+                'text_match': False,
+                'edit_distance_input_to_reference': None,
+                'edit_distance_prediction_to_reference': None,
+                'refinement_gain': None,
+            }
+        )
     scored.update(
         {
             'prompt_variant_index': int(variant_prediction.get('prompt_variant_index', 0) or 0),
@@ -179,8 +249,10 @@ def _score_variant(prediction_row: dict[str, Any], variant_prediction: dict[str,
             'request_base_url': variant_prediction.get('request_base_url'),
             'raw_response': variant_prediction.get('raw_response'),
             'parsed_response': variant_prediction.get('parsed_response'),
-            'prediction_error': variant_prediction.get('prediction_error'),
+            'prediction_error': prediction_error,
             'prediction_valid_json': variant_prediction.get('prediction_valid_json'),
+            'retry_attempted': bool(variant_prediction.get('retry_attempted')),
+            'format_instability_error': _is_format_instability_error(prediction_error),
             'response_usage': variant_prediction.get('response_usage'),
         }
     )
@@ -196,7 +268,7 @@ def _score_prediction_row(prediction_row: dict[str, Any]) -> list[dict[str, Any]
 
 def _aggregate_instance_metrics(prediction_row: dict[str, Any], variant_rows: list[dict[str, Any]]) -> dict[str, Any]:
     recipe_success_values = [1.0 if bool(row.get('recipe_success')) else 0.0 for row in variant_rows]
-    refinement_gain_values = [float(row.get('refinement_gain', 0.0)) for row in variant_rows]
+    refinement_gain_values = [row.get('refinement_gain') for row in variant_rows]
     prompt_variant_metrics = []
     recipe_success_by_index: dict[int, bool] = {}
     for row in variant_rows:
@@ -210,8 +282,9 @@ def _aggregate_instance_metrics(prediction_row: dict[str, Any], variant_rows: li
                 'recipe_success': bool(row.get('recipe_success')),
                 'status_match': bool(row.get('status_match')),
                 'text_exact_match': bool(row.get('text_exact_match')),
-                'refinement_gain': float(row.get('refinement_gain', 0.0)),
+                'refinement_gain': None if row.get('refinement_gain') is None else float(row.get('refinement_gain', 0.0)),
                 'prediction_error': row.get('prediction_error'),
+                'format_instability_error': bool(row.get('format_instability_error')),
             }
         )
 
@@ -221,7 +294,10 @@ def _aggregate_instance_metrics(prediction_row: dict[str, Any], variant_rows: li
             'num_prompt_variants': len(variant_rows),
             'mean_rs': _safe_mean(recipe_success_values),
             'rs_at_k': any(recipe_success_values),
-            'mean_rg': _safe_mean(refinement_gain_values),
+            'mean_rg': _mean_optional(refinement_gain_values),
+            'num_valid_rg_variants': sum(1 for value in refinement_gain_values if value is not None),
+            'num_invalid_variants': sum(1 for row in variant_rows if row.get('prediction_error') is not None),
+            'num_format_error_variants': sum(1 for row in variant_rows if bool(row.get('format_instability_error'))),
             'prompt_variant_metrics': prompt_variant_metrics,
             'recipe_success_prompt0': bool(recipe_success_by_index.get(0, False)),
         }
@@ -257,10 +333,30 @@ def _instance_slice_summary(rows: list[dict[str, Any]], key: str) -> list[dict[s
             'count': len(bucket),
             'mean_rs': _safe_mean([float(item.get('mean_rs', 0.0)) for item in bucket]),
             'rs_at_k': _rate(bucket, 'rs_at_k'),
-            'mean_rg': _safe_mean([float(item.get('mean_rg', 0.0)) for item in bucket]),
+            'mean_rg': _mean_optional([item.get('mean_rg') for item in bucket]),
         }
         for value, bucket in sorted(grouped.items())
     ]
+
+
+def _attach_domain_metadata(rows: list[dict[str, Any]], *, key: str, metadata: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    enriched = []
+    for row in rows:
+        copied = dict(row)
+        raw_value = str(row.get(key) or 'UNKNOWN')
+        meta = metadata.get(
+            raw_value,
+            {
+                'label': raw_value.replace('_', ' ').title(),
+                'abbr': raw_value.upper(),
+                'order': 999,
+            },
+        )
+        copied['domain_label'] = str(meta.get('label') or raw_value)
+        copied['domain_abbr'] = str(meta.get('abbr') or raw_value.upper())
+        copied['domain_order'] = int(meta.get('order', 999) or 999)
+        enriched.append(copied)
+    return sorted(enriched, key=lambda row: (int(row.get('domain_order', 999) or 999), str(row.get(key) or '')))
 
 
 def _variant_slice_summary(rows: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
@@ -275,7 +371,9 @@ def _variant_slice_summary(rows: list[dict[str, Any]], key: str) -> list[dict[st
             'recipe_success_rate': _rate(bucket, 'recipe_success'),
             'status_accuracy': _rate(bucket, 'status_match'),
             'exact_text_match_rate': _rate(bucket, 'text_exact_match'),
-            'avg_refinement_gain': _safe_mean([float(row.get('refinement_gain', 0.0)) for row in bucket]),
+            'avg_refinement_gain': _mean_optional([row.get('refinement_gain') for row in bucket]),
+            'valid_json_rate': _rate(bucket, 'prediction_valid_json'),
+            'format_error_rate': _rate(bucket, 'format_instability_error'),
         }
         for value, bucket in sorted(grouped.items())
     ]
@@ -289,6 +387,9 @@ def _summary_report_text(summary: dict[str, Any]) -> str:
     parts.append(f"mean_rs={float(summary.get('mean_rs', 0.0)):.4f}")
     parts.append(f"rs_at_k={float(summary.get('rs_at_k', 0.0)):.4f}")
     parts.append(f"mean_rg={float(summary.get('mean_rg', 0.0)):.4f}")
+    parts.append(f"valid_json_rate={float(summary.get('valid_json_rate', 0.0)):.4f}")
+    parts.append(f"empty_response_rate={float(summary.get('empty_response_rate', 0.0)):.4f}")
+    parts.append(f"format_error_rate={float(summary.get('format_error_rate', 0.0)):.4f}")
     if 'ocs' in summary:
         parts.append(f"ocs={float(summary.get('ocs', 0.0)):.4f}")
         parts.append(f"ocs_at_k={float(summary.get('ocs_at_k', 0.0)):.4f}")
@@ -303,6 +404,9 @@ def _paper_metrics_payload(summary: dict[str, Any]) -> dict[str, Any]:
         'mean_rs': summary.get('mean_rs'),
         'rs_at_k': summary.get('rs_at_k'),
         'mean_rg': summary.get('mean_rg'),
+        'valid_json_rate': summary.get('valid_json_rate'),
+        'empty_response_rate': summary.get('empty_response_rate'),
+        'format_error_rate': summary.get('format_error_rate'),
     }
     for key in ('ocs', 'ocs_at_k', 'rs_front', 'rs_middle', 'rs_end'):
         if key in summary:
@@ -318,7 +422,10 @@ def _build_summary(
     model_name: str | None,
     base_url: str | None,
 ) -> dict[str, Any]:
-    mean_rg_values = [float(row.get('mean_rg', 0.0)) for row in instance_rows]
+    domain_metadata = _load_domain_metadata()
+    mean_rg_values = [row.get('mean_rg') for row in instance_rows if int(row.get('num_valid_rg_variants', 0) or 0) > 0]
+    by_domain = _attach_domain_metadata(_instance_slice_summary(instance_rows, 'domain'), key='domain', metadata=domain_metadata)
+    by_source_domain = _instance_slice_summary(instance_rows, 'source_domain')
     summary = {
         'track': _track_name_from_predictions_path(predictions_path),
         'model': model_name,
@@ -327,11 +434,14 @@ def _build_summary(
         'num_variant_predictions': len(variant_rows),
         'mean_rs': _safe_mean([float(row.get('mean_rs', 0.0)) for row in instance_rows]),
         'rs_at_k': _rate(instance_rows, 'rs_at_k'),
-        'mean_rg': _safe_mean(mean_rg_values),
-        'median_rg': _safe_median(mean_rg_values),
+        'mean_rg': _mean_optional(mean_rg_values),
+        'median_rg': _safe_median([float(value) for value in mean_rg_values if value is not None]),
+        'valid_json_rate': _rate(variant_rows, 'prediction_valid_json'),
+        'empty_response_rate': _safe_mean([1.0 if str(row.get('prediction_error') or '') == 'empty_response' else 0.0 for row in variant_rows]),
+        'format_error_rate': _rate(variant_rows, 'format_instability_error'),
         'by_operator': _instance_slice_summary(instance_rows, 'operator'),
-        'by_domain': _instance_slice_summary(instance_rows, 'domain'),
-        'by_source_domain': _instance_slice_summary(instance_rows, 'source_domain'),
+        'by_domain': by_domain,
+        'by_source_domain': by_source_domain,
         'by_reference_status': _instance_slice_summary(instance_rows, 'reference_status'),
         'per_prompt_variant': _variant_slice_summary(variant_rows, 'prompt_variant_index'),
     }
